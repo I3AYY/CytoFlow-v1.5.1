@@ -83,6 +83,7 @@ const app = createApp({
         const isDataLoading = ref(false);
         const isSpinning = ref(false);
         const isMpiLoading = ref(false); // เพิ่ม State สำหรับ Spinner ค้นหา CID
+        const isCytoLoading = ref(false); // [UX Update] เพิ่ม State สำหรับ Spinner โหลด Cyto No.
         const isEditMode = ref(false);
         const viewMode = ref(false); 
         const isSidebarOpen = ref(true); 
@@ -1692,7 +1693,9 @@ const app = createApp({
             }
         };
 
+        // --- [UX Update] เพิ่ม isCytoLoading ในการดึงข้อมูลเลข Cyto ถัดไป ---
         const getNextCytoPreview = async () => {
+            isCytoLoading.value = true; // เปิดสถานะกำลังโหลด Cyto
             formReg.cytoNoPreview = 'กำลังโหลด...';
             try { 
                 const res = await runGas('apiGetNextCytoNo', config.selectedYear); 
@@ -1704,6 +1707,8 @@ const app = createApp({
             } catch(e) {
                 console.error("Get Cyto No Error:", e);
                 formReg.cytoNoPreview = '- (ระบบจะสร้างใหม่อัตโนมัติ)';
+            } finally {
+                isCytoLoading.value = false; // ปิดสถานะกำลังโหลด
             }
         };
 
@@ -2363,7 +2368,7 @@ const app = createApp({
         return {
             appVersion, page, loginStep, formLogin, otpInput, otpMessage, otpCooldown,
             isLocked, lockPassword, lockError, unlockScreen, handleCancelUnlock,
-            isLoading, isDataLoading, isSpinning, isMpiLoading, isEditMode, viewMode, isSidebarOpen, isDashboardTopOpen,
+            isLoading, isDataLoading, isSpinning, isMpiLoading, isCytoLoading, isEditMode, viewMode, isSidebarOpen, isDashboardTopOpen,
             theme, changeTheme, showSettingsModal, showProfileModal, showStickerModal,
             
             // Zoom & Editor states
@@ -2373,7 +2378,7 @@ const app = createApp({
             showHistoryModal, isHistoryLoading, isHistoryPreloading, patientHistoryData, historySearchCid, 
             selectedHistoricalReport, isViewingHistory, fetchPatientHistory, viewHistoricalReport,
             
-            checkMPI, editLogs, // <--- Export checkMPI และ editLogs ให้หน้า UI นำไปใช้
+            checkMPI, editLogs,
 
             stickerConfig, mockSticker, saveStickerConfig, printSticker,
 
@@ -2390,12 +2395,12 @@ const app = createApp({
             
             // --- การจัดกลุ่มรายงานผล ---
             hasData200, displayHeader300, displayHeader200, displayHeader100, append100Details,
-            canEditGenCat, // Export ให้ UI ใช้ปิด/เปิดส่วนของ Cat 2
+            canEditGenCat, 
             // ----------------------------------------------------
 
             closeAllDropdowns, selectContra, togglePrevTx, toggleOrganism, toggleNonNeo,
             toggleCheckAdq, toggleCheckGen, toggleCheck100, toggleCheck200, toggleCheck300, 
-            prompt030, promptRequireSatisfactory, // Export alert ใหม่
+            prompt030, promptRequireSatisfactory, 
             formatNoCode, formatOrganisms, formatCommentPdf, getMethodColor,
             progressPercent, canAccessReport, canViewReportDoc, tatOverview, unitStats, getTAT,
             executePrint, generatePdfFilename, getPrintDateTime, hospitalLogoBase64, hospitalLogoUrl,
