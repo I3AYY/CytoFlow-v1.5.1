@@ -59,9 +59,13 @@
   .swal2-container { z-index: 9999999 !important; }
 
   /* --- SWEETALERT THEME SUPPORT (เพื่อให้ Modal เข้ากับ Theme) --- */
-  [data-theme="dark"] .swal2-popup { background: var(--bg-card) !important; color: var(--text-main) !important; border: 1px solid var(--border-color); backdrop-filter: var(--glass-blur); }
+  /* [UX/UI Update] ปรับลดความโปร่งใส (Opacity เพิ่มเป็น 0.95) เพื่อให้อ่านประวัติคนไข้ที่ซับซ้อนได้ง่ายขึ้น ลด Visual Noise */
+  .swal2-popup { background: rgba(255, 255, 255, 0.95) !important; backdrop-filter: var(--glass-blur) !important; color: var(--text-main) !important; }
+  
+  [data-theme="dark"] .swal2-popup { background: rgba(40, 48, 62, 0.95) !important; color: var(--text-main) !important; border: 1px solid var(--border-color); backdrop-filter: var(--glass-blur); }
   [data-theme="dark"] .swal2-title, [data-theme="dark"] .swal2-html-container { color: var(--text-main) !important; }
-  [data-theme="eyecare"] .swal2-popup { background: var(--bg-card) !important; color: var(--text-main) !important; border: 1px solid var(--border-color); }
+  
+  [data-theme="eyecare"] .swal2-popup { background: rgba(253, 250, 242, 0.95) !important; color: var(--text-main) !important; border: 1px solid var(--border-color); }
   [data-theme="eyecare"] .swal2-title, [data-theme="eyecare"] .swal2-html-container { color: var(--text-main) !important; }
 
   .theme-text { color: var(--text-main); }
@@ -255,6 +259,16 @@
   }
   .animate-stamp {
       animation: stampEffect 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+  }
+
+  /* [UX/UI Update] เพิ่ม Animation สำหรับ Loading Spinners เพื่อให้ดูเป็นมืออาชีพและลดความสับสนของผู้ใช้ */
+  @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+  }
+  .animate-spin {
+      animation: spin 1s linear infinite;
+      transform-origin: center center;
   }
 
   th.sticky, td.sticky {
