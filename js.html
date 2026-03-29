@@ -1,0 +1,2398 @@
+<script>
+const { createApp, ref, reactive, onMounted, computed, watch, nextTick } = Vue;
+
+// ==============================================================
+// --- AI Core Timeout & Retry Management (v1.5.1) ---
+// แก้อาการ Infinite Loading (หมุนค้าง) จากปัญหา GAS Cold Start
+// ==============================================================
+const runGas = (funcName, ...args) => {
+    const MAX_RETRIES = 2; // จำนวนครั้งที่จะลองใหม่เมื่อเกิด Timeout หรือ Error
+    const TIMEOUT_MS = 45000; // ตัดจบที่ 45 วินาที (ป้องกันการค้างตลอดกาล)
+
+    const execute = (retryCount) => {
+        return new Promise((resolve, reject) => {
+            if (typeof google === 'undefined') { 
+                reject(new Error("ไม่พบ Google API")); 
+                return; 
+            }
+
+            let isResolved = false;
+
+            // ตั้งเวลา Timeout สำหรับรอบนี้
+            const timeoutId = setTimeout(() => {
+                if (!isResolved) {
+                    isResolved = true;
+                    reject(new Error(`Timeout: การตอบสนองจากเซิร์ฟเวอร์ช้าเกินไป (Cold Start) [${funcName}]`));
+                }
+            }, TIMEOUT_MS);
+
+            google.script.run
+                .withSuccessHandler(res => {
+                    if (!isResolved) {
+                        isResolved = true;
+                        clearTimeout(timeoutId);
+                        res ? resolve(res) : reject(new Error("No response"));
+                    }
+                })
+                .withFailureHandler(err => {
+                    if (!isResolved) {
+                        isResolved = true;
+                        clearTimeout(timeoutId);
+                        reject(err);
+                    }
+                })
+                [funcName](...args);
+
+        }).catch(err => {
+            // ถ้ารอบนี้พัง หรือ Timeout ให้ลองใหม่จนกว่าจะครบ MAX_RETRIES
+            if (retryCount < MAX_RETRIES) {
+                console.warn(`[CytoFlow Auto-Retry ${retryCount + 1}/${MAX_RETRIES}] ฟังก์ชัน ${funcName} ล้มเหลว: ${err.message}. กำลังลองใหม่ใน 1.5 วินาที...`);
+                return new Promise(res => setTimeout(res, 1500)).then(() => execute(retryCount + 1));
+            }
+            throw err; // ถ้าครบโควต้าแล้วยังพัง ให้โยน Error ออกไปให้ระบบ UI จัดการ
+        });
+    };
+
+    return execute(0);
+};
+
+const app = createApp({
+    setup() {
+        // --- Core States ---
+        const page = ref('login'); 
+        const loginStep = ref(1);
+        const otpInput = ref('');
+        const otpMessage = ref('');
+        const otpCooldown = ref(0); 
+        let otpTimerInterval = null;
+        
+        // UPDATE VERSION (1.5.1 AI Core)
+        const appVersion = "v1.5.1 AI Core"; 
+        
+        // --- Security / Lock Screen ---
+        const isLocked = ref(false);
+        const lockPassword = ref('');
+        const lockError = ref('');
+        let afkTimeout = null;
+        let sessionCheckInterval = null;
+
+        // --- Theme ---
+        const theme = ref('light'); 
+        
+        const isLoading = ref(false);
+        const isDataLoading = ref(false);
+        const isSpinning = ref(false);
+        const isEditMode = ref(false);
+        const viewMode = ref(false); 
+        const isSidebarOpen = ref(true); 
+        const isDashboardTopOpen = ref(true); 
+        
+        const showSettingsModal = ref(false);
+        const showProfileModal = ref(false);
+        const showStickerModal = ref(false); 
+        
+        // --- WYSIWYG Sticker Editor States ---
+        const stickerZoom = ref(3.0); 
+        const activeStickerElement = ref(null); 
+        
+        // --- MPI / HISTORY & AUDIT LOG STATES (v1.5.1) ---
+        const showHistoryModal = ref(false);
+        const isHistoryLoading = ref(false);
+        const isHistoryPreloading = ref(false);
+        const patientHistoryData = ref([]);
+        const historySearchCid = ref('');
+        const selectedHistoricalReport = ref('current');
+        const isViewingHistory = ref(false);
+        const currentReportOriginalData = ref(null);
+        
+        // State สำหรับเก็บ Log การแก้ไขข้อมูล
+        const editLogs = ref({ regEdits: [], reportEdits: [], initialReport: null });
+
+        // --- STICKER PRINTING STATES ---
+        const stickerConfig = reactive({
+            width: 50, height: 25,
+            autoPrintCount: 2, manualPrintCount: 1,
+            barcodeHeight: 30, barcodeWidth: 1.5,
+            layout: {
+                cyto: { x: 25, y: 4, size: 12, rot: 0, visible: true, bold: true, font: 'Sarabun' },
+                name: { x: 25, y: 9, size: 9, rot: 0, visible: true, bold: false, font: 'Sarabun' },
+                age:  { x: 25, y: 13, size: 9, rot: 0, visible: true, bold: false, font: 'Sarabun' },
+                spec: { x: 25, y: 17, size: 9, rot: 0, visible: true, bold: false, font: 'Sarabun' },
+                unit: { x: 25, y: 21, size: 9, rot: 0, visible: true, bold: false, font: 'Sarabun' },
+                bar:  { x: 25, y: 24, rot: 0, visible: true, width: 1.5 },
+                qrcode: { x: 25, y: 35, size: 50, rot: 0, visible: false } // เพิ่มการตั้งค่า QR Code พื้นฐาน
+            }
+        });
+
+        const mockSticker = reactive({
+            cytoNo: '690001',
+            name: 'น.ส.ทดสอบ1 ทดสอบ2',
+            age: '35',
+            method: 'Pap smear',
+            unit: 'รพ.สต.ปากแพรก อ.ดอนสัก'
+        });
+
+        const user = reactive({ 
+            name: '', position: '', role: '', username: '', image: '' 
+        });
+
+        const systemConfig = reactive({ 
+            logoUrl: 'https://drive.google.com/thumbnail?id=1ztvazUTKvglF0vRo4leaDe38olLfXQWs&sz=w200' 
+        });
+        
+        const config = reactive({ years: [], selectedYear: '' });
+        const formLogin = reactive({ username: '', password: '' });
+
+        const stats = reactive({ total: 0, reported: 0, abnormal: 0 });
+        const patients = ref([]);
+        
+        // --- Master Data ---
+        const masterUnits = ref([]);
+        const masterDistricts = ref([]);
+        const masterAdequacy = ref([]);
+        const masterCytoTechs = ref([]);
+        const masterPathos = ref([]);
+        const masterSquamous = ref([]);
+        const masterGlandular = ref([]);
+        const masterCat300 = ref([]); 
+        const prefixesData = ref([]); 
+        const prefixes = computed(() => prefixesData.value.map(p => p.prefix));
+        const masterContras = ref([]);
+        const masterPrevTx = ref([]);
+        const masterOrganism = ref([]);
+        const masterNonNeo = ref([]);
+        const masterSpecimenType = ref([]);
+        const masterComment = ref([]);
+
+        // --- Helper: Date Calculation for Defaults ---
+        const getFirstDayOfMonth = () => {
+            const date = new Date();
+            return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-01`;
+        };
+        const getLastDayOfMonth = () => {
+            const date = new Date();
+            const lastDay = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+            return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(lastDay.getDate()).padStart(2, '0')}`;
+        };
+
+        // --- Filter States ---
+        const unitFilter = ref('All'); 
+        const searchQuery = ref('');
+        const statusFilter = ref('Pending'); 
+        const dashDateStart = ref(getFirstDayOfMonth()); 
+        const dashDateEnd = ref(getLastDayOfMonth()); 
+
+        const formatDisplayDate = (dateStr) => {
+            if (!dateStr || dateStr === '-') return '-';
+            const parts = dateStr.split('-');
+            if (parts.length === 3) {
+                return `${parts[2]}-${parts[1]}-${parts[0]}`;
+            }
+            return dateStr;
+        };
+
+        const defaultForm = {
+            rowId: '', cytoNo: '', cytoNoPreview: '',
+            hn: '', cid: '', prefix: '', fname: '', lname: '', age: '', sex: 'หญิง',
+            specimenDate: '', receivedDate: '', 
+            unit: '', district: '', hcode: '', coordinator: '', phone: '',
+            para: '', last: '', lmp: '', contraception: '', 
+            prevTx: '', lastPap: '', clinFind: '', 
+            clinDx: '', method: '', registerName: ''
+        };
+        
+        const formReg = reactive({ ...defaultForm });
+
+        const ui = reactive({
+            searchContra: '', showContraList: false, contraOtherText: '',
+            showPrevTxList: false, prevTxSelections: [], prevTxOtherText: '',
+            lmpType: 'ระบุวันที่', lmpDate: '',
+            reportDateStart: getFirstDayOfMonth(), 
+            reportDateEnd: getLastDayOfMonth(), 
+            reportSearch: '',
+            reportAdditionalOther: '',
+            showPatientInfo: false,
+            showOrganismList: false, 
+            showNonNeoList: false,
+            commentSelect: '',
+            commentOtherText: '',
+            accordion: { adq: false, gen: false, cat100: false, cat200: false, cat300: false }
+        });
+
+        const formReport = reactive({ 
+            rowId: '', cytoNo: '', patient: {}, 
+            adequacy: '', adequacyDetail: '', additional: '',
+            organismSelections: [], organismOtherText: '', 
+            nonNeoSelections: [], 
+            squamousMain: '', squamousSubSingle: '', vainOption: '',        
+            glandularMain: '', glandularSub: '',      
+            cat300: '', comment: '',
+            cytoName: '', cytoDate: '', cytoTime: '',
+            hasPatho: false, pathoName: '', pathoDate: '', pathoTime: ''
+        });
+
+        watch([() => ui.commentSelect, () => ui.commentOtherText], ([sel, other]) => {
+            if (sel === 'Other') {
+                formReport.comment = 'Other : ' + other;
+            } else {
+                formReport.comment = sel;
+            }
+        });
+
+        const frontendLog = async (action, detail, username) => {
+            try { await runGas('apiFrontendLog', action, detail, username || 'Unknown'); } catch(e){}
+        };
+
+        // --- Preferences System ---
+        const PREFS_KEY = 'cytoPrefs_v99';
+        const loadPrefs = () => {
+            try {
+                const prefsStr = localStorage.getItem(PREFS_KEY);
+                if (prefsStr) {
+                    const p = JSON.parse(prefsStr);
+                    if (p.selectedYear && config.years.includes(p.selectedYear)) {
+                        config.selectedYear = p.selectedYear;
+                    } else {
+                        const currentThaiYear = (new Date().getFullYear() + 543).toString();
+                        if (config.years.includes(currentThaiYear)) config.selectedYear = currentThaiYear;
+                    }
+                    if (p.statusFilter) statusFilter.value = p.statusFilter;
+                    if (p.dashDateStart !== undefined) dashDateStart.value = p.dashDateStart;
+                    if (p.dashDateEnd !== undefined) dashDateEnd.value = p.dashDateEnd;
+                    if (p.reportDateStart !== undefined) ui.reportDateStart = p.reportDateStart;
+                    if (p.reportDateEnd !== undefined) ui.reportDateEnd = p.reportDateEnd;
+                } else {
+                    const currentThaiYear = (new Date().getFullYear() + 543).toString();
+                    if (config.years.includes(currentThaiYear)) config.selectedYear = currentThaiYear;
+                }
+            } catch(e) {}
+        };
+
+        const savePrefs = () => {
+            const p = {
+                selectedYear: config.selectedYear,
+                statusFilter: statusFilter.value,
+                dashDateStart: dashDateStart.value,
+                dashDateEnd: dashDateEnd.value,
+                reportDateStart: ui.reportDateStart,
+                reportDateEnd: ui.reportDateEnd
+            };
+            localStorage.setItem(PREFS_KEY, JSON.stringify(p));
+        };
+
+        watch([() => config.selectedYear, statusFilter, dashDateStart, dashDateEnd, () => ui.reportDateStart, () => ui.reportDateEnd], () => {
+            if (page.value !== 'login') savePrefs();
+        }, { deep: true });
+
+        // Computed properties สำหรับเช็คว่ามี Data หรือไม่ เพื่อประมวลผลการกาถูกในหน้า UI
+        const hasData100 = computed(() => formReport.organismSelections.length > 0 || formReport.nonNeoSelections.length > 0 || !!formReport.organismOtherText);
+        const hasData200Sq = computed(() => !!formReport.squamousMain);
+        const hasData200Gl = computed(() => !!formReport.glandularMain);
+        const hasData300 = computed(() => !!formReport.cat300);
+        const hasDataComment = computed(() => !!ui.commentSelect || !!ui.commentOtherText);
+
+        // --- การจัดกลุ่มใบรายงานผล ---
+        const hasData200 = computed(() => hasData200Sq.value || hasData200Gl.value);
+        
+        const displayHeader300 = computed(() => hasData300.value);
+        const displayHeader200 = computed(() => hasData200.value);
+        const displayHeader100 = computed(() => hasData100.value && !hasData200.value && !hasData300.value);
+        const append100Details = computed(() => hasData100.value && (hasData200.value || hasData300.value));
+
+        // ตรวจสอบสิทธิ์การเข้าถึงหมวด 2 (ต้องตอบ Satisfactory หมวด 1 ก่อน)
+        const canEditGenCat = computed(() => {
+            return formReport.adequacy === '010 Satisfactory';
+        });
+
+        const historicalOptions = computed(() => {
+            if (!currentReportOriginalData.value) return [];
+            return patientHistoryData.value.filter(x => x.cytoNo !== currentReportOriginalData.value.cytoNo && x.status === 'Reported');
+        });
+
+        watch(() => formReport.squamousMain, (newVal, oldVal) => {
+             if(oldVal && newVal !== oldVal) { formReport.squamousSubSingle = ''; formReport.vainOption = ''; }
+        });
+        watch(() => formReport.squamousSubSingle, (newVal) => {
+             if (newVal !== '241 SIL') { formReport.vainOption = ''; }
+        });
+        watch(() => formReport.glandularMain, (newVal, oldVal) => {
+             if(oldVal && newVal !== oldVal) { formReport.glandularSub = ''; }
+        });
+
+        // --- ระบบ Auto Clear เมื่อเลือก 030 Unsatisfactory หรือเปลี่ยนคำตอบ ---
+        const clear100 = () => {
+            formReport.organismSelections = [];
+            formReport.organismOtherText = '';
+            formReport.nonNeoSelections = [];
+        };
+
+        const clear200 = () => {
+            formReport.squamousMain = '';
+            formReport.squamousSubSingle = '';
+            formReport.vainOption = '';
+            formReport.glandularMain = '';
+            formReport.glandularSub = '';
+        };
+
+        const clear300 = () => {
+            formReport.cat300 = '';
+        };
+
+        watch(() => formReport.adequacy, (newVal, oldVal) => { 
+            if (oldVal && newVal !== oldVal) {
+                formReport.adequacyDetail = ''; 
+            }
+            if (newVal !== '010 Satisfactory') {
+                clear100();
+                clear200();
+                clear300();
+                ui.accordion.gen = false;
+                ui.accordion.cat100 = false;
+                ui.accordion.cat200 = false;
+                ui.accordion.cat300 = false;
+            }
+        });
+
+        const promptRequireSatisfactory = () => {
+            if(typeof Swal !== 'undefined') {
+                Swal.fire('ไม่สามารถตอบได้', 'หมวดนี้จะตอบได้เฉพาะเมื่อเลือก "010 Satisfactory" ในหมวด 1 เท่านั้น', 'warning');
+            }
+        };
+
+        const prompt030 = () => {
+            promptRequireSatisfactory();
+        };
+
+        // --- Checkbox Click Handlers (Clear Data with SweetAlert) ---
+        const toggleCheckAdq = async () => {
+            if (!formReport.adequacy) return; 
+            const confirm = await Swal.fire({ 
+                title: 'ล้างคำตอบ?', 
+                text: 'คุณต้องการล้างคำตอบทั้งหมดในหมวด 1. SPECIMEN ADEQUACY ใช่หรือไม่?', 
+                icon: 'warning', 
+                showCancelButton: true, 
+                confirmButtonColor: '#ef4444', 
+                confirmButtonText: 'ล้างคำตอบ', 
+                cancelButtonText: 'ยกเลิก' 
+            });
+            if (confirm.isConfirmed) {
+                formReport.adequacy = '';
+                formReport.adequacyDetail = '';
+                formReport.additional = '';
+                ui.reportAdditionalOther = '';
+            }
+        };
+
+        const toggleCheckGen = async () => {
+            if (!canEditGenCat.value) {
+                promptRequireSatisfactory();
+                return;
+            }
+            if (!hasData100.value && !hasData200Sq.value && !hasData200Gl.value && !hasData300.value) return;
+            const confirm = await Swal.fire({ 
+                title: 'ล้างคำตอบ?', 
+                text: 'คุณต้องการล้างคำตอบทั้งหมดในหมวด 2. GENERAL CATEGORIZATION ใช่หรือไม่?', 
+                icon: 'warning', 
+                showCancelButton: true, 
+                confirmButtonColor: '#ef4444', 
+                confirmButtonText: 'ล้างคำตอบ', 
+                cancelButtonText: 'ยกเลิก' 
+            });
+            if (confirm.isConfirmed) {
+                clear100();
+                clear200();
+                clear300();
+            }
+        };
+
+        const toggleCheck100 = async () => {
+            if (!canEditGenCat.value) return;
+            if (!hasData100.value) return;
+            const confirm = await Swal.fire({ title: 'ล้างคำตอบ?', text: 'ล้างคำตอบในหมวด 100 NEGATIVE ใช่หรือไม่?', icon: 'warning', showCancelButton: true, confirmButtonColor: '#ef4444', confirmButtonText: 'ล้างคำตอบ', cancelButtonText: 'ยกเลิก' });
+            if (confirm.isConfirmed) clear100();
+        };
+
+        const toggleCheck200 = async () => {
+            if (!canEditGenCat.value) return;
+            if (!hasData200Sq.value && !hasData200Gl.value) return;
+            const confirm = await Swal.fire({ title: 'ล้างคำตอบ?', text: 'ล้างคำตอบในหมวด 200 EPITHELIAL ใช่หรือไม่?', icon: 'warning', showCancelButton: true, confirmButtonColor: '#ef4444', confirmButtonText: 'ล้างคำตอบ', cancelButtonText: 'ยกเลิก' });
+            if (confirm.isConfirmed) clear200();
+        };
+
+        const toggleCheck300 = async () => {
+            if (!canEditGenCat.value) return;
+            if (!hasData300.value) return;
+            const confirm = await Swal.fire({ title: 'ล้างคำตอบ?', text: 'ล้างคำตอบในหมวด 300 OTHER MALIGNANT ใช่หรือไม่?', icon: 'warning', showCancelButton: true, confirmButtonColor: '#ef4444', confirmButtonText: 'ล้างคำตอบ', cancelButtonText: 'ยกเลิก' });
+            if (confirm.isConfirmed) clear300();
+        };
+
+        const changeTheme = (newTheme) => {
+            theme.value = newTheme;
+            document.documentElement.setAttribute('data-theme', newTheme);
+            const savedStr = localStorage.getItem('cytoUser_v99');
+            if (savedStr) {
+                try {
+                    const saved = JSON.parse(savedStr);
+                    saved.theme = newTheme;
+                    localStorage.setItem('cytoUser_v99', JSON.stringify(saved));
+                } catch(e) {}
+            }
+        };
+
+        // --- AFK / SESSION TIMEOUT LOGIC (v1.5.1 updated to close modals) ---
+        const AFK_LIMIT_MS = 25 * 60 * 1000; 
+        const SESSION_LIMIT_MS = 60 * 60 * 1000; 
+
+        const updateSessionActivity = () => {
+            if (page.value === 'login' || isLocked.value) return;
+            const savedUserStr = localStorage.getItem('cytoUser_v99');
+            if (savedUserStr) {
+                try {
+                    const savedUser = JSON.parse(savedUserStr);
+                    savedUser.lastActive = Date.now();
+                    localStorage.setItem('cytoUser_v99', JSON.stringify(savedUser));
+                } catch(e) {}
+            }
+        };
+
+        const resetAfkTimer = () => {
+            if (page.value === 'login') return;
+            if (!isLocked.value) {
+                updateSessionActivity(); 
+                clearTimeout(afkTimeout);
+                afkTimeout = setTimeout(() => { lockScreen(); }, AFK_LIMIT_MS); 
+            }
+        };
+
+        const startSessionMonitor = () => {
+            if (sessionCheckInterval) clearInterval(sessionCheckInterval);
+            sessionCheckInterval = setInterval(() => {
+                if (page.value === 'login') return;
+                const savedUserStr = localStorage.getItem('cytoUser_v99');
+                if (savedUserStr) {
+                    try {
+                        const savedUser = JSON.parse(savedUserStr);
+                        const lastActive = savedUser.lastActive || 0;
+                        if (Date.now() - lastActive > SESSION_LIMIT_MS) {
+                            frontendLog("Auto Logout", "Session expired due to inactivity", user.username);
+                            forceLogout(true); 
+                        }
+                    } catch(e) {}
+                }
+            }, 60000); 
+        };
+
+        const lockScreen = () => {
+            if (page.value === 'login') return;
+            isLocked.value = true;
+            lockPassword.value = '';
+            lockError.value = '';
+            clearTimeout(afkTimeout);
+
+            // บังคับปิด Modal ต่างๆ ด้วยเมื่อเข้าโหมดล็อคจอ
+            showSettingsModal.value = false;
+            showProfileModal.value = false;
+            showStickerModal.value = false;
+            showHistoryModal.value = false;
+
+            const savedUserStr = localStorage.getItem('cytoUser_v99');
+            if (savedUserStr) {
+                try {
+                    const savedUser = JSON.parse(savedUserStr);
+                    savedUser.isLocked = true; 
+                    savedUser.lastActive = Date.now(); 
+                    localStorage.setItem('cytoUser_v99', JSON.stringify(savedUser));
+                } catch(e) {}
+            }
+        };
+
+        const unlockScreen = async () => {
+            if (!lockPassword.value) return;
+            isLoading.value = true;
+            lockError.value = '';
+            try {
+                const res = await runGas('apiVerifyPassword', user.username, lockPassword.value);
+                if (res.status === 'success') {
+                    isLocked.value = false;
+                    const savedUserStr = localStorage.getItem('cytoUser_v99');
+                    if (savedUserStr) {
+                        try {
+                            const savedUser = JSON.parse(savedUserStr);
+                            savedUser.isLocked = false; 
+                            savedUser.lastActive = Date.now(); 
+                            localStorage.setItem('cytoUser_v99', JSON.stringify(savedUser));
+                        } catch(e) {}
+                    }
+                    resetAfkTimer();
+                } else {
+                    lockError.value = 'รหัสผ่านผิดพลาด ระบบกำลังออกจากระบบ...';
+                    setTimeout(() => { forceLogout(); }, 1500);
+                }
+            } catch (e) {
+                lockError.value = 'เกิดข้อผิดพลาดในการยืนยันตัวตน';
+            } finally {
+                isLoading.value = false;
+            }
+        };
+
+        const handleCancelUnlock = () => {
+            frontendLog("Cancel Unlock", "User canceled screen unlock and chose to logout", user.username);
+            forceLogout();
+        };
+
+        const handleMainScroll = (e) => {};
+        const handleTableScroll = (e) => {
+            if (page.value === 'statistics') {
+                const scrollTop = e.target.scrollTop;
+                if (scrollTop > 5 && isDashboardTopOpen.value) {
+                    isDashboardTopOpen.value = false; 
+                } 
+                else if (scrollTop <= 0 && !isDashboardTopOpen.value) {
+                    isDashboardTopOpen.value = true; 
+                }
+            }
+        };
+
+        const progressPercent = computed(() => {
+            return stats.total === 0 ? 0 : Math.round((stats.reported / stats.total) * 100);
+        });
+
+        const canAccessReport = computed(() => {
+            if (!user.position && !user.role) return false;
+            if (user.role === 'Admin') return true;
+            const pos = user.position || '';
+            return pos.includes('นักเทคนิคการแพทย์') || pos.includes('นักวิทยาศาสตร์การแพทย์') || pos.includes('พยาธิแพทย์');
+        });
+
+        const canViewReportDoc = computed(() => {
+            if (!user.position && !user.role) return false;
+            if (user.role === 'Admin') return true;
+            const pos = user.position || '';
+            return pos.includes('นักเทคนิคการแพทย์') || pos.includes('นักวิทยาศาสตร์การแพทย์') || pos.includes('พยาธิแพทย์');
+        });
+        
+        const tatOverview = computed(() => {
+            let onTime = 0, late = 0, totalWithRecDate = 0;
+            (patients.value || []).forEach(p => {
+                if (p.recDate) {
+                    const tatData = getTAT(p);
+                    totalWithRecDate++;
+                    if (tatData.days <= 14) onTime++; 
+                    else late++;
+                }
+            });
+            return {
+                onTime: onTime, late: late, total: totalWithRecDate,
+                percentOnTime: totalWithRecDate === 0 ? 0 : Math.round((onTime/totalWithRecDate)*100)
+            };
+        });
+
+        const unitStats = computed(() => {
+            const map = {};
+            (patients.value || []).forEach(p => {
+                if(!map[p.unit]) map[p.unit] = { name: p.unit, total: 0, reported: 0 };
+                map[p.unit].total++;
+                if(p.status === 'Reported') map[p.unit].reported++;
+            });
+            return Object.values(map).sort((a,b) => b.total - a.total);
+        });
+
+        const methodStats = computed(() => {
+            const map = {};
+            (patients.value || []).forEach(p => {
+                const m = p.method || 'ไม่ระบุ';
+                if(!map[m]) map[m] = { name: m, total: 0, reported: 0 };
+                map[m].total++;
+                if(p.status === 'Reported') map[m].reported++;
+            });
+            return Object.values(map).sort((a,b) => b.total - a.total);
+        });
+
+        const squamousDetailOptions = computed(() => {
+            if (!formReport.squamousMain) return [];
+            const filtered = masterSquamous.value.filter(x => x.main === formReport.squamousMain && x.detail1);
+            return [...new Set(filtered.map(x => x.detail1))];
+        });
+
+        const squamousSubDetailOptions = computed(() => {
+            if (formReport.squamousSubSingle !== '241 SIL') return [];
+            const filtered = masterSquamous.value.filter(x => x.detail1 === '241 SIL' && x.detail2);
+            return [...new Set(filtered.map(x => x.detail2))];
+        });
+
+        const glandularDetailOptions = computed(() => {
+            if (!formReport.glandularMain || formReport.glandularMain === '281 Endocervical adenocarcinoma in situ (AIS)') return [];
+            const filtered = masterGlandular.value.filter(x => x.main === formReport.glandularMain && x.detail1);
+            return [...new Set(filtered.map(x => x.detail1))];
+        });
+
+        const closeAllDropdowns = () => { 
+            ui.showContraList = false; ui.showPrevTxList = false; 
+            ui.showOrganismList = false; ui.showNonNeoList = false;
+        };
+
+        const selectContra = (val) => { ui.searchContra = val; ui.showContraList = false; };
+
+        const togglePrevTx = (item) => { 
+            const idx = ui.prevTxSelections.indexOf(item); 
+            if (idx > -1) ui.prevTxSelections.splice(idx, 1); 
+            else ui.prevTxSelections.push(item); 
+        };
+        
+        const toggleOrganism = (item) => { 
+            const idx = formReport.organismSelections.indexOf(item); 
+            if (idx > -1) formReport.organismSelections.splice(idx, 1); 
+            else formReport.organismSelections.push(item); 
+        };
+
+        const toggleNonNeo = (item) => { 
+            const idx = formReport.nonNeoSelections.indexOf(item); 
+            if (idx > -1) formReport.nonNeoSelections.splice(idx, 1); 
+            else formReport.nonNeoSelections.push(item); 
+        };
+
+        const getMethodColor = (val) => {
+            if (!masterSpecimenType.value) return 'text-slate-500 font-bold';
+            const idx = masterSpecimenType.value.indexOf(val);
+            if (idx === 0) return 'text-slate-600 bg-slate-100 px-2.5 py-1 rounded-md text-sm border theme-border font-bold';
+            if (idx === 1) return 'text-indigo-600 bg-indigo-50 border border-indigo-200 px-2.5 py-1 rounded-md text-sm font-bold';
+            if (idx === 2) return 'text-emerald-600 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-md text-sm font-bold';
+            return 'text-slate-500 font-bold';
+        };
+
+        const getMethodTextColor = (val) => {
+            if (!masterSpecimenType.value) return 'text-slate-700';
+            const idx = masterSpecimenType.value.indexOf(val);
+            if (idx === 0) return 'text-slate-700';
+            if (idx === 1) return 'text-indigo-700';
+            if (idx === 2) return 'text-emerald-700';
+            return 'text-slate-700';
+        };
+
+        const getMethodColorStyle = (val) => {
+            if (!masterSpecimenType.value) return { color: '#334155' };
+            const idx = masterSpecimenType.value.indexOf(val);
+            if (idx === 1) return { color: '#4338ca' }; 
+            if (idx === 2) return { color: '#047857' }; 
+            return { color: '#334155' }; 
+        };
+
+        watch(() => formReg.prefix, (newVal) => {
+            const found = prefixesData.value.find(p => p.prefix === newVal);
+            if (found && found.sex) formReg.sex = found.sex;
+            else formReg.sex = 'หญิง'; 
+        });
+
+        const formatNoCode = (str) => {
+            if (!str) return '';
+            return str.replace(/^\d{3}\s*(?:-\s*)?/, '').trim();
+        };
+
+        const formatOrganisms = (selections, otherText) => {
+            if(!selections) return '';
+            return selections.map(s => {
+                if(s === '109 Other organism' || s.includes('Other organism')) return 'Other organism : ' + otherText;
+                return formatNoCode(s);
+            }).join(', ');
+        };
+
+        const formatCommentPdf = (commentStr) => {
+            if (!commentStr) return '-';
+            if (commentStr.startsWith('Other : ')) return commentStr.replace('Other : ', '');
+            return commentStr;
+        };
+
+        const hospitalLogoUrl = 'https://drive.google.com/thumbnail?id=1OYPsStfO6aYigu6ChIbiYTu4pwqMlXMA&sz=w400';
+        const hospitalLogoBase64 = ref('');
+        let isFetchingLogo = false;
+        
+        const fetchHospitalLogo = async () => {
+            if (hospitalLogoBase64.value || isFetchingLogo) return; 
+            isFetchingLogo = true;
+            try {
+                const url = hospitalLogoUrl;
+                const proxy1 = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url);
+                const proxy2 = 'https://corsproxy.io/?' + encodeURIComponent(url);
+                let res = await fetch(proxy1).catch(() => null);
+                if (!res || !res.ok) res = await fetch(proxy2).catch(() => null);
+                
+                if (res && res.ok) {
+                    const blob = await res.blob();
+                    const reader = new FileReader();
+                    reader.onloadend = () => { hospitalLogoBase64.value = reader.result; };
+                    reader.readAsDataURL(blob);
+                }
+            } catch (e) {
+                console.warn("Failed to fetch Hospital Logo as Base64:", e);
+            } finally {
+                isFetchingLogo = false;
+            }
+        };
+
+        // --- MPI (MASTER PATIENT INDEX) LOGIC (v1.5.1 AI Core) ---
+        const parseCytoNo = (cytoNoStr) => {
+            if (!cytoNoStr) return 0;
+            return parseInt(cytoNoStr.replace(/\D/g, '')) || 0;
+        };
+        
+        const fetchPatientHistorySilent = async (patientObjOrCid) => {
+            let cid = typeof patientObjOrCid === 'object' ? patientObjOrCid.cid : patientObjOrCid;
+            let currentCyto = typeof patientObjOrCid === 'object' ? parseCytoNo(patientObjOrCid.cytoNo) : (currentReportOriginalData.value ? parseCytoNo(currentReportOriginalData.value.cytoNo) : 999999999);
+
+            if (!cid) return;
+            isHistoryPreloading.value = true;
+            try {
+                const res = await runGas('apiGetPatientHistory', cid, user.username);
+                if (res && res.status === 'success') {
+                    let historyList = res.data || [];
+                    historyList = historyList.filter(h => parseCytoNo(h.cytoNo) <= currentCyto);
+                    patientHistoryData.value = historyList.sort((a, b) => parseCytoNo(b.cytoNo) - parseCytoNo(a.cytoNo));
+                }
+            } catch (e) {
+                console.error("Silent history fetch error:", e);
+            } finally {
+                isHistoryPreloading.value = false;
+            }
+        };
+
+        const fetchPatientHistory = async (patientObjOrCid) => {
+            let cid = typeof patientObjOrCid === 'object' ? patientObjOrCid.cid : patientObjOrCid;
+            let currentCyto = typeof patientObjOrCid === 'object' ? parseCytoNo(patientObjOrCid.cytoNo) : (currentReportOriginalData.value ? parseCytoNo(currentReportOriginalData.value.cytoNo) : 999999999);
+
+            if (!cid || String(cid).trim() === '') {
+                if(typeof Swal !== 'undefined') Swal.fire('ไม่พบข้อมูล', 'ผู้ป่วยรายนี้ไม่มีเลขประจำตัวประชาชน (CID) ในระบบ', 'warning');
+                return;
+            }
+            if (isHistoryPreloading.value || isHistoryLoading.value) return; 
+
+            historySearchCid.value = cid;
+            showHistoryModal.value = true;
+            
+            if (patientHistoryData.value.length > 0 && patientHistoryData.value[0].cid === cid) return;
+
+            isHistoryLoading.value = true;
+            try {
+                const res = await runGas('apiGetPatientHistory', cid, user.username);
+                if (res && res.status === 'success') {
+                    let historyList = res.data || [];
+                    historyList = historyList.filter(h => parseCytoNo(h.cytoNo) <= currentCyto);
+                    patientHistoryData.value = historyList.sort((a, b) => parseCytoNo(b.cytoNo) - parseCytoNo(a.cytoNo));
+                } else {
+                    if(typeof Swal !== 'undefined') Swal.fire('ข้อผิดพลาด', res.message, 'error');
+                }
+            } catch (e) {
+                console.error(e);
+            } finally {
+                isHistoryLoading.value = false;
+            }
+        };
+
+        const viewHistoricalReport = () => {
+            if (selectedHistoricalReport.value === 'current') {
+                isViewingHistory.value = false;
+                if (currentReportOriginalData.value) populateReportForm(currentReportOriginalData.value);
+            } else {
+                const historyItem = patientHistoryData.value.find(h => h.cytoNo === selectedHistoricalReport.value);
+                if (historyItem) {
+                    isViewingHistory.value = true;
+                    populateReportForm(historyItem);
+                }
+            }
+            generateBarcode();
+        };
+
+        // ฟังก์ชันใหม่สำหรับเช็ค MPI อัตโนมัติเมื่อกรอก HN หรือ CID
+        const checkMPI = async (searchType) => {
+            // ไม่เช็คเมื่ออยู่ในโหมด Edit หรือ View (เช็คเฉพาะตอนลงทะเบียนใหม่)
+            if (viewMode.value || isEditMode.value) return; 
+            
+            const val = searchType === 'HN' ? formReg.hn : formReg.cid;
+            if (!val || String(val).trim() === '') return;
+
+            try {
+                const res = await runGas('apiCheckPatientMPI', searchType, val);
+                if (res && res.status === 'found' && res.patient) {
+                    const pat = res.patient;
+                    const fullName = `${pat.prefix}${pat.fname} ${pat.lname}`;
+                    
+                    if(typeof Swal !== 'undefined') {
+                        const result = await Swal.fire({
+                            title: 'พบประวัติผู้ป่วยเดิม',
+                            html: `พบข้อมูลที่ตรงกับ <b>${searchType}: ${val}</b> คือ<br><strong class="text-xl text-indigo-600 mt-3 mb-1 block">${fullName}</strong><br>ต้องการใช้ชื่อ-สกุลนี้หรือไม่?`,
+                            icon: 'info',
+                            showCancelButton: true,
+                            confirmButtonColor: '#4f46e5',
+                            cancelButtonColor: '#64748b',
+                            confirmButtonText: 'ใช้ชื่อนี้',
+                            cancelButtonText: 'พิมพ์เอง'
+                        });
+
+                        if (result.isConfirmed) {
+                            formReg.prefix = pat.prefix || '';
+                            formReg.fname = pat.fname || '';
+                            formReg.lname = pat.lname || '';
+                        }
+                    }
+                }
+            } catch (e) {
+                console.log("MPI Check Error:", e);
+            }
+        };
+
+        // --- FETCH AUDIT LOGS (v1.5.1 AI Core) ---
+        const fetchEditLogs = async (cytoNo) => {
+            try {
+                const res = await runGas('apiGetEditLogs', config.selectedYear, cytoNo);
+                if (res && res.status === 'success') {
+                    editLogs.value.regEdits = res.regEdits || [];
+                    editLogs.value.reportEdits = res.reportEdits || [];
+                    editLogs.value.initialReport = res.initialReport || null;
+                }
+            } catch (e) {
+                console.error("Fetch Logs Error:", e);
+            }
+        };
+
+        // ==============================================================
+        // --- STICKER WYSIWYG PRINTING LOGIC ---
+        // ==============================================================
+
+        const getStickerPrefix = (p) => {
+            if(p === 'นางสาว') return 'น.ส.';
+            if(p === 'เด็กหญิง') return 'ด.ญ.';
+            if(p === 'เด็กชาย') return 'ด.ช.';
+            return p || '';
+        };
+
+        const getStickerSpecimen = (m) => {
+            if(m === 'Conventional Pap smear') return 'Pap smear';
+            if(m === 'Liquid based cytological') return 'LBC';
+            if(m === 'Liquid-based cytology [HPV โครงการ]') return 'LBC [HPV]';
+            return m || '';
+        };
+
+        const fetchStickerConfig = async () => {
+            try {
+                const res = await runGas('apiGetStickerConfig');
+                if (res && res.status === 'success') {
+                    Object.assign(stickerConfig, res.config);
+                    if (res.config.layoutJSON) {
+                        try { 
+                            const parsed = JSON.parse(res.config.layoutJSON);
+                            // Safe merge to support backward compatibility
+                            for (let k in parsed) {
+                                if (stickerConfig.layout[k]) {
+                                    Object.assign(stickerConfig.layout[k], parsed[k]);
+                                }
+                            }
+                            // Assign default fonts if old db doesn't have it
+                            ['cyto', 'name', 'age', 'spec', 'unit'].forEach(k => {
+                                if (stickerConfig.layout[k] && !stickerConfig.layout[k].font) {
+                                    stickerConfig.layout[k].font = 'Sarabun';
+                                }
+                            });
+                            // Default QR Code for backward compatibility
+                            if (!stickerConfig.layout.qrcode) {
+                                stickerConfig.layout.qrcode = { x: 25, y: 35, size: 50, rot: 0, visible: false };
+                            }
+                        } 
+                        catch(e) { console.error("Parse layout JSON error", e); }
+                    }
+                }
+            } catch (e) { console.error("Sticker Config Error", e); }
+        };
+
+        const saveStickerConfig = async () => {
+            if (user.role !== 'Admin') return;
+            isLoading.value = true;
+            try {
+                const payload = { ...stickerConfig };
+                payload.layoutJSON = JSON.stringify(stickerConfig.layout);
+                delete payload.layout; 
+                
+                const res = await runGas('apiSaveStickerConfig', payload, user.username);
+                if (res && res.status === 'success') {
+                    if(typeof Swal !== 'undefined') Swal.fire('สำเร็จ', 'บันทึกการตั้งค่าสติ๊กเกอร์เรียบร้อย', 'success');
+                    showStickerModal.value = false;
+                } else {
+                    if(typeof Swal !== 'undefined') Swal.fire('ข้อผิดพลาด', res.message, 'error');
+                }
+            } catch (e) {
+                if(typeof Swal !== 'undefined') Swal.fire('ข้อผิดพลาด', e.message, 'error');
+            } finally {
+                isLoading.value = false;
+            }
+        };
+
+        const generatePreviewBarcode = () => {
+            const el = document.getElementById('barcode-preview');
+            if (typeof JsBarcode !== 'undefined' && el && stickerConfig.layout) {
+                const bWidth = Number(stickerConfig.barcodeWidth) || 1.5; 
+                JsBarcode(el, mockSticker.cytoNo, {
+                    format: "CODE128",
+                    width: bWidth,
+                    height: Number(stickerConfig.barcodeHeight) || 30,
+                    displayValue: false,
+                    margin: 0,
+                    lineColor: "#000000"
+                });
+            }
+        };
+
+        const generatePreviewQRCode = () => {
+            const el = document.getElementById('qrcode-preview');
+            if (typeof QRCode !== 'undefined' && el && stickerConfig.layout && stickerConfig.layout.qrcode) {
+                el.innerHTML = ''; 
+                if (stickerConfig.layout.qrcode.visible) {
+                    new QRCode(el, {
+                        text: mockSticker.cytoNo,
+                        width: Number(stickerConfig.layout.qrcode.size) || 50,
+                        height: Number(stickerConfig.layout.qrcode.size) || 50,
+                        colorDark : "#000000",
+                        colorLight : "#ffffff",
+                        correctLevel : QRCode.CorrectLevel.M
+                    });
+                } else {
+                    el.innerHTML = `<i class="ph ph-qr-code text-slate-300" style="font-size: ${(stickerConfig.layout.qrcode.size * 0.8)}px;"></i>`;
+                }
+            }
+        };
+
+        watch(() => showStickerModal.value, (newVal) => { 
+            if(newVal) {
+                setTimeout(() => {
+                    generatePreviewBarcode();
+                    generatePreviewQRCode();
+                }, 300);
+            }
+        });
+        
+        watch(() => [stickerConfig.barcodeHeight, stickerConfig.barcodeWidth], () => {
+            if (showStickerModal.value) generatePreviewBarcode();
+        }, { deep: true });
+
+        watch(() => [stickerConfig.layout?.qrcode?.size, stickerConfig.layout?.qrcode?.visible], () => {
+            if (showStickerModal.value) generatePreviewQRCode();
+        }, { deep: true });
+
+        const zoomInSticker = () => {
+            if (stickerZoom.value < 5.0) stickerZoom.value = Math.min(5.0, stickerZoom.value + 0.1);
+        };
+        
+        const zoomOutSticker = () => {
+            if (stickerZoom.value > 0.5) stickerZoom.value = Math.max(0.5, stickerZoom.value - 0.1);
+        };
+        
+        const resetZoomSticker = () => {
+            stickerZoom.value = 3.0;
+        };
+        
+        const handleZoomWheel = (e) => {
+            if (e.deltaY < 0) zoomInSticker();
+            else zoomOutSticker();
+        };
+
+        const pxToMm = (px) => px * (25.4 / 96); 
+
+        const startDrag = (elementKey, event) => {
+            activeStickerElement.value = elementKey;
+            
+            const startX = event.clientX;
+            const startY = event.clientY;
+            
+            const initialObjX = stickerConfig.layout[elementKey].x;
+            const initialObjY = stickerConfig.layout[elementKey].y;
+            
+            const currentZoom = stickerZoom.value || 1;
+
+            const onMouseMove = (e) => {
+                const dx = e.clientX - startX;
+                const dy = e.clientY - startY;
+                
+                const dxMm = pxToMm(dx) / currentZoom;
+                const dyMm = pxToMm(dy) / currentZoom;
+
+                stickerConfig.layout[elementKey].x = Math.round((initialObjX + dxMm) * 10) / 10;
+                stickerConfig.layout[elementKey].y = Math.round((initialObjY + dyMm) * 10) / 10;
+            };
+
+            const onMouseUp = () => {
+                document.removeEventListener('mousemove', onMouseMove);
+                document.removeEventListener('mouseup', onMouseUp);
+            };
+
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+        };
+
+        const startRotate = (elementKey, event) => {
+            event.stopPropagation(); 
+            activeStickerElement.value = elementKey;
+            
+            const targetEl = event.target.closest('.sticker-element');
+            if (!targetEl) return;
+
+            const rect = targetEl.getBoundingClientRect();
+            const centerX = rect.left + rect.width / 2;
+            const centerY = rect.top + rect.height / 2;
+
+            const onMouseMove = (e) => {
+                const mouseX = e.clientX;
+                const mouseY = e.clientY;
+                
+                const radians = Math.atan2(mouseY - centerY, mouseX - centerX);
+                let degrees = (radians * (180 / Math.PI)) + 90; 
+                
+                if (degrees < 0) degrees += 360;
+                
+                const snap = 15;
+                degrees = Math.round(degrees / snap) * snap;
+                if (degrees === 360) degrees = 0;
+
+                stickerConfig.layout[elementKey].rot = degrees;
+            };
+
+            const onMouseUp = () => {
+                document.removeEventListener('mousemove', onMouseMove);
+                document.removeEventListener('mouseup', onMouseUp);
+            };
+
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+        };
+
+        // Print Helper
+        const getFontStr = (fontName) => fontName ? `'${fontName}', sans-serif` : `'Sarabun', sans-serif`;
+
+        const printSticker = async (patient, isAutoPrint = false) => {
+            const count = isAutoPrint ? Number(stickerConfig.autoPrintCount) : Number(stickerConfig.manualPrintCount);
+            if (count <= 0) return;
+
+            const canvas = document.createElement('canvas');
+            let barcodeImageBase64 = "";
+            let qrcodeImageBase64 = "";
+            const l = stickerConfig.layout;
+
+            // Generate Barcode DataURL
+            if (l.bar && l.bar.visible && typeof JsBarcode !== 'undefined') {
+                const bWidth = Number(stickerConfig.barcodeWidth) || 1.5; 
+                JsBarcode(canvas, patient.cytoNo, {
+                    format: "CODE128",
+                    width: bWidth,
+                    height: Number(stickerConfig.barcodeHeight) || 30,
+                    displayValue: false,
+                    margin: 0,
+                    lineColor: "#000000"
+                });
+                barcodeImageBase64 = canvas.toDataURL("image/png");
+            }
+
+            // Generate QR Code DataURL
+            if (l.qrcode && l.qrcode.visible && typeof QRCode !== 'undefined') {
+                const tempDiv = document.createElement('div');
+                new QRCode(tempDiv, {
+                    text: patient.cytoNo,
+                    width: Number(l.qrcode.size) || 50,
+                    height: Number(l.qrcode.size) || 50,
+                    colorDark : "#000000",
+                    colorLight : "#ffffff",
+                    correctLevel : QRCode.CorrectLevel.M
+                });
+                
+                const qrCanvas = tempDiv.querySelector('canvas');
+                if (qrCanvas) {
+                    qrcodeImageBase64 = qrCanvas.toDataURL("image/png");
+                } else {
+                    const qrImg = tempDiv.querySelector('img');
+                    if (qrImg) qrcodeImageBase64 = qrImg.src;
+                }
+            }
+
+            const nameStr = `${getStickerPrefix(patient.prefix)}${patient.fname} ${patient.lname}`.substring(0, 35);
+            const specStr = getStickerSpecimen(patient.method);
+
+            let htmlContent = `
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <meta charset="UTF-8">
+                    <style>
+                        @import url('https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600&family=Prompt:wght@300;400;500;600&family=Roboto+Mono:wght@400;500;600&family=Sarabun:wght@300;400;500;600;700&family=Taviraj:wght@400;500;600&display=swap');
+                        @page { margin: 0; size: ${stickerConfig.width}mm ${stickerConfig.height}mm; }
+                        body {
+                            margin: 0; padding: 0;
+                            width: ${stickerConfig.width}mm; height: ${stickerConfig.height}mm;
+                            background: white; color: black;
+                            position: relative; overflow: hidden;
+                        }
+                        .page-break { page-break-after: always; width: 100%; height: 100%; position: relative; }
+                        .el {
+                            position: absolute;
+                            white-space: nowrap;
+                            transform-origin: center center;
+                            line-height: 1.1;
+                        }
+                        .barcode-img { display: block; max-width: none; }
+                    </style>
+                </head>
+                <body>
+            `;
+
+            for (let i = 0; i < count; i++) {
+                htmlContent += `<div class="page-break">`;
+                
+                if (l.cyto && l.cyto.visible) {
+                    htmlContent += `<div class="el" style="left:${l.cyto.x}mm; top:${l.cyto.y}mm; font-size:${l.cyto.size}pt; font-weight:${l.cyto.bold?'bold':'normal'}; font-family:${getFontStr(l.cyto.font)}; transform: translate(-50%, -50%) rotate(${l.cyto.rot}deg);">${patient.cytoNo}</div>`;
+                }
+                if (l.name && l.name.visible) {
+                    htmlContent += `<div class="el" style="left:${l.name.x}mm; top:${l.name.y}mm; font-size:${l.name.size}pt; font-weight:${l.name.bold?'bold':'normal'}; font-family:${getFontStr(l.name.font)}; transform: translate(-50%, -50%) rotate(${l.name.rot}deg);">${nameStr}</div>`;
+                }
+                if (l.age && l.age.visible) {
+                    htmlContent += `<div class="el" style="left:${l.age.x}mm; top:${l.age.y}mm; font-size:${l.age.size}pt; font-weight:${l.age.bold?'bold':'normal'}; font-family:${getFontStr(l.age.font)}; transform: translate(-50%, -50%) rotate(${l.age.rot}deg);">${patient.age} ปี</div>`;
+                }
+                if (l.spec && l.spec.visible) {
+                    htmlContent += `<div class="el" style="left:${l.spec.x}mm; top:${l.spec.y}mm; font-size:${l.spec.size}pt; font-weight:${l.spec.bold?'bold':'normal'}; font-family:${getFontStr(l.spec.font)}; transform: translate(-50%, -50%) rotate(${l.spec.rot}deg);">${specStr}</div>`;
+                }
+                if (l.unit && l.unit.visible) {
+                    const unitStr = patient.unit || '';
+                    htmlContent += `<div class="el" style="left:${l.unit.x}mm; top:${l.unit.y}mm; font-size:${l.unit.size}pt; font-weight:${l.unit.bold?'bold':'normal'}; font-family:${getFontStr(l.unit.font)}; transform: translate(-50%, -50%) rotate(${l.unit.rot}deg);">${unitStr}</div>`;
+                }
+                if (l.bar && l.bar.visible && barcodeImageBase64) {
+                    htmlContent += `<div class="el" style="left:${l.bar.x}mm; top:${l.bar.y}mm; transform: translate(-50%, -50%) rotate(${l.bar.rot}deg);"><img src="${barcodeImageBase64}" class="barcode-img"></div>`;
+                }
+                if (l.qrcode && l.qrcode.visible && qrcodeImageBase64) {
+                    htmlContent += `<div class="el" style="left:${l.qrcode.x}mm; top:${l.qrcode.y}mm; transform: translate(-50%, -50%) rotate(${l.qrcode.rot}deg);"><img src="${qrcodeImageBase64}" style="width:${l.qrcode.size}px; height:${l.qrcode.size}px; display:block; border:none; margin:0; padding:0;"></div>`;
+                }
+                
+                htmlContent += `</div>`;
+            }
+
+            htmlContent += `</body></html>`;
+
+            const printIframe = document.createElement('iframe');
+            printIframe.style.cssText = 'position:fixed; right:0; bottom:0; width:0; height:0; border:0;';
+            document.body.appendChild(printIframe);
+
+            const iframeDoc = printIframe.contentWindow.document;
+            iframeDoc.open();
+            iframeDoc.write(htmlContent);
+            iframeDoc.close();
+
+            setTimeout(() => {
+                printIframe.contentWindow.focus();
+                printIframe.contentWindow.print();
+                setTimeout(() => { document.body.removeChild(printIframe); }, 2000);
+            }, 500); 
+        };
+
+        watch(() => page.value, async (newPage, oldPage) => {
+            if (newPage === 'statistics' && oldPage !== 'statistics') {
+                await fetchData();
+                if (isDashboardTopOpen.value) {
+                    await nextTick();
+                    setTimeout(renderCharts, 150); 
+                }
+            }
+            if (newPage === 'report_preview') {
+                generateBarcode();
+                fetchHospitalLogo(); 
+                setTimeout(() => { document.title = generatePdfFilename(); }, 300);
+            } else {
+                document.title = 'CytoFlow 2026';
+            }
+        });
+
+        const generateBarcode = () => {
+            setTimeout(() => {
+                const el = document.getElementById('barcode-cyto');
+                if (typeof JsBarcode !== 'undefined' && formReport.patient && formReport.patient.cytoNo && el) {
+                    JsBarcode(el, formReport.patient.cytoNo, {
+                        format: "CODE128",
+                        width: 1.5,
+                        height: 35,
+                        displayValue: false,
+                        margin: 0,
+                        lineColor: "#334155" 
+                    });
+                }
+            }, 500); 
+        };
+
+        const logoRef = ref(null);
+        const isLogoPlaying = ref(true);
+        const toggleLogo = () => {
+            const img = logoRef.value; 
+            if (!img) return;
+            if (isLogoPlaying.value) {
+                try {
+                    const canvas = document.createElement('canvas'); 
+                    const ctx = canvas.getContext('2d');
+                    canvas.width = img.naturalWidth || 200; 
+                    canvas.height = img.naturalHeight || 200;
+                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height); 
+                    img.src = canvas.toDataURL(); 
+                    isLogoPlaying.value = false;
+                } catch(e) {}
+            } else { 
+                img.src = systemConfig.logoUrl; 
+                isLogoPlaying.value = true; 
+            }
+        };
+
+        const getTAT = (p) => {
+            if (!p.recDate) return { days: 0, percent: 0, colorClass: 'bg-slate-300', statusText: 'รอข้อมูล' };
+            const start = new Date(p.recDate);
+            let end = new Date(); 
+            
+            if (p.status === 'Reported') {
+                const reportDTStr = p.pathoDateTime ? p.pathoDateTime : p.cytoDateTime;
+                const parsed = parseDateTimeString(reportDTStr);
+                if(parsed.date) end = new Date(parsed.date);
+            }
+            
+            start.setHours(0,0,0,0); 
+            end.setHours(0,0,0,0);
+            
+            const diffTime = Math.abs(end - start);
+            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+            
+            let percent = (diffDays / 14) * 100;
+            if (percent > 100) percent = 100;
+            
+            let colorClass = 'bg-gradient-to-r from-emerald-400 via-emerald-200 to-emerald-400'; 
+            if (diffDays >= 8 && diffDays <= 12) colorClass = 'bg-gradient-to-r from-amber-400 via-yellow-200 to-amber-400'; 
+            if (diffDays >= 13) colorClass = 'bg-gradient-to-r from-rose-500 via-red-300 to-rose-500'; 
+            
+            const dayText = diffDays <= 1 ? 'Day' : 'Days';
+            
+            return {
+                days: diffDays,
+                percent: percent,
+                colorClass: colorClass,
+                statusText: `${diffDays} ${dayText}`
+            };
+        };
+
+        const filteredPatients = computed(() => {
+            let list = patients.value || [];
+            
+            if (unitFilter.value !== 'All') {
+                list = list.filter(p => p.unit === unitFilter.value);
+            }
+            if (statusFilter.value !== 'All') {
+                list = list.filter(p => p.status === statusFilter.value);
+            }
+            if (dashDateStart.value) {
+                list = list.filter(p => p.recDate && p.recDate >= dashDateStart.value);
+            }
+            if (dashDateEnd.value) {
+                list = list.filter(p => p.recDate && p.recDate <= dashDateEnd.value);
+            }
+
+            if (!searchQuery.value) return list;
+            const q = searchQuery.value.toLowerCase();
+            return list.filter(p => {
+                const searchString = (p.fname || "") + (p.lname || "") + (p.hn || "") + (p.cytoNo || "") + (p.cid || "");
+                return searchString.toLowerCase().includes(q);
+            });
+        });
+
+        const filteredReportPatients = computed(() => {
+            let list = patients.value || [];
+            if (unitFilter.value !== 'All') {
+                list = list.filter(p => p.unit === unitFilter.value);
+            }
+            if (statusFilter.value !== 'All') {
+                list = list.filter(p => p.status === statusFilter.value);
+            }
+            if (ui.reportDateStart) {
+                list = list.filter(p => p.recDate && p.recDate >= ui.reportDateStart);
+            }
+            if (ui.reportDateEnd) {
+                list = list.filter(p => p.recDate && p.recDate <= ui.reportDateEnd);
+            }
+            if (ui.reportSearch) {
+                const q = ui.reportSearch.toLowerCase();
+                list = list.filter(p => {
+                    const fullName = (p.fname || "") + (p.lname || "");
+                    return (p.cytoNo && p.cytoNo.toLowerCase().includes(q)) || 
+                           (p.hn && p.hn.includes(q)) || 
+                           fullName.toLowerCase().includes(q);
+                });
+            }
+            return list;
+        });
+
+        const adequacyDetailOptions = computed(() => {
+            return masterAdequacy.value.filter(x => x.group === formReport.adequacy);
+        });
+        
+        const additionalOptions = computed(() => {
+            return masterAdequacy.value.filter(x => x.group === 'Additional');
+        });
+        
+        let donutChart = null;
+        const renderCharts = () => {
+            if (page.value !== 'statistics' || !isDashboardTopOpen.value) return;
+            const ctx = document.getElementById('statusChart');
+            if(!ctx) return;
+            
+            if(donutChart) { 
+                donutChart.destroy(); 
+                donutChart = null; 
+            }
+            
+            Chart.defaults.font.family = "'Sarabun', sans-serif";
+            Chart.defaults.color = theme.value === 'dark' ? '#94a3b8' : '#64748b';
+            
+            const gradComplete = ctx.getContext('2d').createLinearGradient(0, 0, 0, 200);
+            gradComplete.addColorStop(0, '#818cf8'); 
+            gradComplete.addColorStop(1, '#c084fc'); 
+            
+            const gradPending = ctx.getContext('2d').createLinearGradient(0, 0, 0, 200);
+            gradPending.addColorStop(0, '#fbbf24'); 
+            gradPending.addColorStop(1, '#f97316'); 
+
+            donutChart = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: ['รายงานผลแล้ว', 'รอรายงานผล'],
+                    datasets: [{ 
+                        data: [stats.reported, stats.total - stats.reported], 
+                        backgroundColor: [gradComplete, gradPending], 
+                        borderWidth: 0, 
+                        hoverOffset: 8,
+                        borderRadius: 10 
+                    }]
+                },
+                options: { 
+                    circumference: 180, 
+                    rotation: 270, 
+                    cutout: '75%', 
+                    responsive: true, 
+                    maintainAspectRatio: false, 
+                    plugins: { 
+                        legend: { display: false }, 
+                        tooltip: { padding: 10, cornerRadius: 10 } 
+                    },
+                    animation: { 
+                        animateScale: true, 
+                        animateRotate: true,
+                        duration: 1500, 
+                        easing: 'easeOutQuart' 
+                    }
+                }
+            });
+        };
+
+        watch([() => isDashboardTopOpen.value, () => theme.value], async ([newDashOpen, newTheme]) => { 
+            if (page.value === 'statistics' && newDashOpen) {
+                await nextTick();
+                setTimeout(renderCharts, 150); 
+            }
+        });
+
+        onMounted(() => {
+            document.addEventListener('click', (e) => {
+                if (!e.target.closest('.contra-dropdown')) ui.showContraList = false;
+                if (!e.target.closest('.prevtx-dropdown')) ui.showPrevTxList = false;
+                if (!e.target.closest('.organism-dropdown')) ui.showOrganismList = false;
+                if (!e.target.closest('.nonneo-dropdown')) ui.showNonNeoList = false;
+            });
+
+            window.addEventListener('mousemove', resetAfkTimer, { passive: true });
+            window.addEventListener('keydown', resetAfkTimer, { passive: true });
+            window.addEventListener('click', resetAfkTimer, { passive: true });
+
+            try {
+                const savedUser = localStorage.getItem('cytoUser_v99');
+                if (savedUser) {
+                    const parsed = JSON.parse(savedUser);
+                    
+                    if (parsed.lastActive && (Date.now() - parsed.lastActive > SESSION_LIMIT_MS)) {
+                        localStorage.removeItem('cytoUser_v99'); 
+                        throw new Error("Session expired (Inactive for > 1 hr). Auto Logout.");
+                    }
+
+                    if (parsed.isLocked === true) {
+                        isLocked.value = true;
+                    } else {
+                        isLocked.value = false;
+                        resetAfkTimer(); 
+                    }
+
+                    if(parsed.user) Object.assign(user, parsed.user);
+                    if(parsed.systemLogo) systemConfig.logoUrl = parsed.systemLogo;
+                    if(parsed.theme) changeTheme(parsed.theme);
+                    if (parsed.years) {
+                        config.years = parsed.years;
+                    }
+                    
+                    loadPrefs();
+                    if (!config.selectedYear && config.years.length > 0) {
+                        config.selectedYear = config.years[config.years.length - 1];
+                    }
+                    
+                    page.value = 'dashboard';
+                    loadMasterData();
+                    fetchData();
+                    fetchStickerConfig(); // LOAD STICKER SETTINGS
+                    startSessionMonitor(); 
+                }
+            } catch (e) { 
+                console.log(e.message);
+                localStorage.removeItem('cytoUser_v99'); 
+                
+                if (e.message.includes("Session expired") && typeof Swal !== 'undefined') {
+                    setTimeout(() => {
+                        Swal.fire({
+                            icon: 'warning',
+                            title: 'เซสชันหมดอายุ',
+                            text: 'ระบบได้ทำการลงชื่อออกอัตโนมัติ เนื่องจากไม่มีการใช้งานระบบเกิน 1 ชั่วโมง (นโยบายรักษาความปลอดภัยข้อมูล PDPA)',
+                            confirmButtonText: 'เข้าสู่ระบบใหม่'
+                        });
+                    }, 500);
+                }
+            }
+        });
+
+        watch(() => config.selectedYear, (newVal) => {
+            if (newVal && page.value !== 'login') {
+                fetchData();
+                if (page.value === 'register') {
+                    getNextCytoPreview();
+                }
+            }
+        });
+
+        const loadMasterData = async () => {
+            try { 
+                const res = await runGas('apiGetMasterData'); 
+                if (res && res.status === 'success') { 
+                    masterUnits.value = res.units || []; 
+                    masterDistricts.value = res.districts || []; 
+                    masterAdequacy.value = res.adequacyMaster || [];
+                    masterCytoTechs.value = res.cytoTechs || [];
+                    masterPathos.value = res.pathos || []; 
+                    
+                    masterSquamous.value = res.masterSquamous || [];
+                    masterGlandular.value = res.masterGlandular || [];
+                    masterCat300.value = res.masterCat300 || []; 
+                    
+                    masterOrganism.value = res.masterOrganism || [];
+                    masterNonNeo.value = res.masterNonNeo || [];
+                    masterContras.value = res.masterContras || [];
+                    masterPrevTx.value = res.masterPrevTx || [];
+                    prefixesData.value = res.prefixes || [];
+                    
+                    masterSpecimenType.value = res.masterSpecimenType || [];
+                    masterComment.value = res.masterComment || [];
+                } 
+            } catch(e) {
+                console.error("Load Master Data Error: ", e);
+            }
+        };
+
+        const startOtpTimer = () => {
+            if (otpTimerInterval) clearInterval(otpTimerInterval);
+            otpTimerInterval = setInterval(() => {
+                otpCooldown.value--;
+                if (otpCooldown.value <= 0) {
+                    clearInterval(otpTimerInterval);
+                }
+            }, 1000);
+        };
+
+        // --- แก้ไขระบบรองรับ Rate Limit OTP และ ล้างช่องให้ว่าง ---
+        const handleLoginStep1 = async () => {
+            if (!formLogin.username || !formLogin.password) return;
+            isLoading.value = true;
+            try {
+                const res = await runGas('apiLoginStep1', formLogin.username, formLogin.password);
+                
+                if (res.status === 'otp_required' || res.status === 'otp_cooldown') { 
+                    loginStep.value = 2; 
+                    otpMessage.value = res.message; 
+                    if(res.systemLogo) systemConfig.logoUrl = res.systemLogo; 
+                    
+                    // --- ล้างเลข OTP ให้ว่างเสมอ เมื่อขอ OTP ใหม่ หรือถูกเตะเข้าหน้ากรอก OTP ---
+                    otpInput.value = '';
+                    
+                    // ตั้งเวลาใหม่ หรือใช้เวลา Cooldown ที่เหลือจาก Backend
+                    otpCooldown.value = res.cooldown || (res.status === 'otp_required' ? 60 : 0);
+                    if (otpCooldown.value > 0) {
+                        startOtpTimer();
+                    }
+                } else { 
+                    if(typeof Swal !== 'undefined') Swal.fire('Login Failed', res.message, 'error'); 
+                }
+            } catch (err) {
+                console.error(err);
+                if(typeof Swal !== 'undefined') Swal.fire('Error', err.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์', 'error');
+            } finally { 
+                isLoading.value = false; 
+            }
+        };
+
+        const handleResendOtp = async () => {
+            if (otpCooldown.value > 0) return;
+            handleLoginStep1(); 
+        };
+
+        const handleCancelLogin = () => {
+            frontendLog("Cancel Login", "User backed out of OTP screen", formLogin.username);
+            loginStep.value = 1;
+            otpInput.value = '';
+            if (otpTimerInterval) clearInterval(otpTimerInterval);
+        };
+
+        const handleLoginStep2 = async () => {
+            if (!otpInput.value) return;
+            isLoading.value = true;
+            try {
+                const res = await runGas('apiVerifyOtp', formLogin.username, otpInput.value);
+                if (res.status === 'success') {
+                    if (otpTimerInterval) clearInterval(otpTimerInterval);
+                    Object.assign(user, res.user); 
+                    config.years = res.years || [];
+                    
+                    loadPrefs();
+                    if (!config.selectedYear && config.years.length > 0) {
+                        config.selectedYear = config.years[config.years.length - 1];
+                    }
+                    
+                    localStorage.setItem('cytoUser_v99', JSON.stringify({ 
+                        user: res.user, 
+                        years: res.years, 
+                        currentYear: res.currentYear, 
+                        systemLogo: systemConfig.logoUrl, 
+                        theme: theme.value,
+                        isLocked: false, 
+                        lastActive: Date.now() 
+                    }));
+                    
+                    page.value = 'dashboard'; 
+                    loadMasterData(); 
+                    fetchData(); 
+                    fetchStickerConfig(); // LOAD STICKER SETTINGS
+                    resetAfkTimer();
+                    startSessionMonitor(); 
+                } else { 
+                    if(typeof Swal !== 'undefined') Swal.fire('OTP Failed', res.message, 'error'); 
+                }
+            } catch (err) {
+                console.error(err);
+                if(typeof Swal !== 'undefined') Swal.fire('Error', err.message || 'ระบบขัดข้อง', 'error');
+            } finally { 
+                isLoading.value = false; 
+            }
+        };
+
+        const handleLogout = async () => {
+            if(typeof Swal === 'undefined') {
+                frontendLog("Logout", "User initiated manual logout", user.username);
+                return forceLogout();
+            }
+            
+            const result = await Swal.fire({ 
+                title: 'ออกจากระบบ?', 
+                icon: 'warning', 
+                showCancelButton: true, 
+                confirmButtonColor: '#ef4444', 
+                confirmButtonText: 'ยืนยัน', 
+                cancelButtonText: 'ยกเลิก' 
+            });
+            if (result.isConfirmed) {
+                frontendLog("Logout", "User confirmed sign out", user.username);
+                forceLogout();
+            }
+        };
+
+        const forceLogout = (isExpired = false) => {
+            localStorage.removeItem('cytoUser_v99'); 
+            isLocked.value = false;
+            isLoading.value = true;
+            clearTimeout(afkTimeout);
+            if (sessionCheckInterval) clearInterval(sessionCheckInterval); 
+            if (otpTimerInterval) clearInterval(otpTimerInterval);
+            
+            // --- ปิด Modal ต่างๆ เพื่อไม่ให้ค้าง (v1.5.1) ---
+            showSettingsModal.value = false;
+            showProfileModal.value = false;
+            showStickerModal.value = false;
+            showHistoryModal.value = false;
+            
+            setTimeout(() => {
+                user.name = ''; 
+                user.image = ''; 
+                user.role = ''; 
+                page.value = 'login'; 
+                loginStep.value = 1; 
+                otpInput.value = ''; 
+                formLogin.username = ''; 
+                formLogin.password = '';
+                Object.assign(formReg, defaultForm); 
+                isLoading.value = false;
+
+                if (isExpired && typeof Swal !== 'undefined') {
+                    Swal.fire({
+                        icon: 'warning',
+                        title: 'เซสชันหมดอายุ',
+                        text: 'คุณไม่ได้ใช้งานระบบนานเกิน 1 ชั่วโมง ระบบจึงทำการลงชื่อออกอัตโนมัติเพื่อความปลอดภัยของข้อมูลผู้ป่วย (PDPA)',
+                        confirmButtonText: 'รับทราบ'
+                    });
+                }
+            }, 800);
+        };
+
+        const fetchData = async () => {
+            if (!config.selectedYear) return;
+            isDataLoading.value = true; 
+            isSpinning.value = true;
+            try {
+                const res = await runGas('apiGetDashboardData', config.selectedYear);
+                if (res && res.status === 'success') {
+                    Object.assign(stats, res.stats); 
+                    
+                    if (res.patients) {
+                        res.patients.forEach(p => { p.showTAT = false; });
+                    }
+                    
+                    patients.value = res.patients || [];
+                    
+                    if (page.value === 'statistics' && isDashboardTopOpen.value) {
+                        await nextTick();
+                        setTimeout(renderCharts, 150);
+                    }
+                }
+            } catch (err) {
+                console.error("Fetch Data Error:", err);
+                if(typeof Swal !== 'undefined') {
+                    Swal.fire({
+                        icon: 'error',
+                        title: 'โหลดข้อมูลไม่สำเร็จ',
+                        text: `เกิดข้อผิดพลาดในการโหลดข้อมูล กรุณาลองอีกครั้ง (${err.message})`,
+                        toast: true, position: 'top-end', timer: 3000, showConfirmButton: false
+                    });
+                }
+            } finally { 
+                isDataLoading.value = false; 
+                setTimeout(() => isSpinning.value = false, 500); 
+            }
+        };
+
+        const getNextCytoPreview = async () => {
+            formReg.cytoNoPreview = 'กำลังโหลด...';
+            try { 
+                const res = await runGas('apiGetNextCytoNo', config.selectedYear); 
+                if(res && res.status === 'success') { 
+                    formReg.cytoNoPreview = res.cytoNoPreview; 
+                } else {
+                    formReg.cytoNoPreview = '- (ระบบจะสร้างใหม่อัตโนมัติ)'; 
+                }
+            } catch(e) {
+                console.error("Get Cyto No Error:", e);
+                formReg.cytoNoPreview = '- (ระบบจะสร้างใหม่อัตโนมัติ)';
+            }
+        };
+
+        const openRegisterPage = () => {
+            isEditMode.value = false; 
+            viewMode.value = false; 
+            Object.assign(formReg, defaultForm);
+            
+            ui.searchContra = ''; 
+            ui.contraOtherText = '';
+            ui.lmpType = 'ระบุวันที่'; 
+            ui.lmpDate = ''; 
+            ui.prevTxSelections = []; 
+            ui.prevTxOtherText = '';
+            
+            editLogs.value = { regEdits: [], reportEdits: [], initialReport: null }; // ล้าง Log
+
+            getNextCytoPreview(); 
+            page.value = 'register';
+        };
+
+        const prepPatientToForm = (patient) => {
+            Object.assign(formReg, defaultForm); 
+            Object.assign(formReg, patient);
+            
+            formReg.receivedDate = patient.recDate;
+            formReg.rowId = patient.rowId; 
+            formReg.cytoNo = patient.cytoNo;
+            formReg.unit = patient.unit || '';
+            formReg.district = patient.district || '';
+            
+            if (patient.contraception && patient.contraception.startsWith('อื่นๆ - ')) { 
+                ui.searchContra = 'อื่นๆ (ระบุ)'; 
+                ui.contraOtherText = patient.contraception.replace('อื่นๆ - ', ''); 
+            } else { 
+                ui.searchContra = patient.contraception; 
+                ui.contraOtherText = ''; 
+            }
+            
+            if (['หมดประจำเดือน', 'จำไม่ได้', 'หลังคลอด'].includes(patient.lmp)) { 
+                ui.lmpType = patient.lmp; 
+                ui.lmpDate = ''; 
+            } else { 
+                ui.lmpType = 'ระบุวันที่'; 
+                ui.lmpDate = patient.lmp; 
+            }
+            
+            ui.prevTxSelections = []; 
+            ui.prevTxOtherText = '';
+            
+            if (patient.prevTx) {
+                const parts = patient.prevTx.split(',').map(s => s.trim());
+                parts.forEach(p => {
+                    if (p.startsWith('อื่นๆ - ')) { 
+                        if(!ui.prevTxSelections.includes('อื่น ๆ (ระบุ)')) ui.prevTxSelections.push('อื่น ๆ (ระบุ)'); 
+                        ui.prevTxOtherText = p.replace('อื่นๆ - ', ''); 
+                    } 
+                    else if (p === 'อื่นๆ') { 
+                        if(!ui.prevTxSelections.includes('อื่น ๆ (ระบุ)')) ui.prevTxSelections.push('อื่น ๆ (ระบุ)'); 
+                    } 
+                    else if (masterPrevTx.value.includes(p)) { 
+                        if(!ui.prevTxSelections.includes(p)) ui.prevTxSelections.push(p); 
+                    } 
+                    else { 
+                        if(!ui.prevTxSelections.includes('อื่น ๆ (ระบุ)')) ui.prevTxSelections.push('อื่น ๆ (ระบุ)'); 
+                        ui.prevTxOtherText = ui.prevTxOtherText ? ui.prevTxOtherText + ' ' + p : p; 
+                    }
+                });
+            }
+        };
+
+        const openEditMode = (patient) => {
+            isEditMode.value = true; 
+            viewMode.value = false; 
+            prepPatientToForm(patient); 
+            page.value = 'register';
+        };
+
+        const openViewMode = (patient) => {
+            isEditMode.value = false; 
+            viewMode.value = true; 
+            prepPatientToForm(patient); 
+            page.value = 'register';
+            fetchEditLogs(patient.cytoNo); // โหลดประวัติการแก้ไข
+        };
+
+        const submitRegister = async () => {
+            if (viewMode.value) return;
+            
+            if (formReg.hn && formReg.hn.length !== 7) { 
+                if(typeof Swal !== 'undefined') Swal.fire('ไม่ถูกต้อง', 'HN ต้องเป็นตัวเลข 7 หลัก', 'warning'); 
+                return; 
+            }
+            if (formReg.cid && formReg.cid.length !== 13) { 
+                if(typeof Swal !== 'undefined') Swal.fire('ไม่ถูกต้อง', 'เลข ปชช. ต้องเป็นตัวเลข 13 หลัก', 'warning'); 
+                return; 
+            }
+            if (!formReg.unit) { 
+                if(typeof Swal !== 'undefined') Swal.fire('ข้อมูลไม่ครบ', 'กรุณาระบุหน่วยเก็บ', 'warning'); 
+                return; 
+            }
+            if (!formReg.age) { 
+                if(typeof Swal !== 'undefined') Swal.fire('ข้อมูลไม่ครบ', 'กรุณาระบุอายุ', 'warning'); 
+                return; 
+            }
+            if (!formReg.specimenDate) { 
+                if(typeof Swal !== 'undefined') Swal.fire('ข้อมูลไม่ครบ', 'กรุณาระบุวันที่เก็บตัวอย่าง', 'warning'); 
+                return; 
+            }
+
+            if(typeof Swal === 'undefined') return;
+            const confirm = await Swal.fire({ 
+                title: isEditMode.value ? 'ยืนยันการแก้ไข?' : 'ยืนยันการบันทึก?', 
+                icon: 'question', 
+                showCancelButton: true, 
+                confirmButtonText: 'บันทึก', 
+                confirmButtonColor: '#4f46e5' 
+            });
+            
+            if (confirm.isConfirmed) {
+                isLoading.value = true;
+                try {
+                    const payload = JSON.parse(JSON.stringify(formReg));
+                    payload.lmp = ui.lmpType === 'ระบุวันที่' ? ui.lmpDate : ui.lmpType;
+                    payload.contraception = ui.searchContra === 'อื่นๆ (ระบุ)' && ui.contraOtherText ? ('อื่นๆ - ' + ui.contraOtherText) : ui.searchContra;
+                    
+                    let finalPrevTx = [];
+                    ui.prevTxSelections.forEach(pt => {
+                        if (pt === 'อื่น ๆ (ระบุ)') { 
+                            if (ui.prevTxOtherText) {
+                                finalPrevTx.push('อื่นๆ - ' + ui.prevTxOtherText); 
+                            } else {
+                                finalPrevTx.push('อื่นๆ'); 
+                            }
+                        } else { 
+                            finalPrevTx.push(pt); 
+                        }
+                    });
+                    
+                    payload.prevTx = finalPrevTx.join(', '); 
+                    payload.registerName = user.name; 
+
+                    let res;
+                    if (isEditMode.value) {
+                        res = await runGas('apiUpdateSample', payload, config.selectedYear, payload.rowId, user.username);
+                    } else {
+                        res = await runGas('apiRegisterSample', payload, config.selectedYear, user.username);
+                    }
+
+                    if (res && res.status === 'success') {
+                        Swal.fire({ 
+                            icon: 'success', 
+                            title: isEditMode.value ? 'แก้ไขสำเร็จ' : 'บันทึกสำเร็จ', 
+                            text: 'Cytology No: ' + res.cytoNo, 
+                            confirmButtonText: 'ตกลง' 
+                        }).then(() => {
+                            if (isEditMode.value) { 
+                                page.value = 'dashboard'; 
+                                fetchData(); 
+                            } else {
+                                const stickyData = { 
+                                    specimenDate: formReg.specimenDate, 
+                                    unit: payload.unit, 
+                                    district: payload.district, 
+                                    hcode: formReg.hcode, 
+                                    coordinator: formReg.coordinator, 
+                                    phone: formReg.phone 
+                                };
+                                openRegisterPage(); 
+                                Object.assign(formReg, stickyData);
+                                fetchData(); 
+                                
+                                const mainEl = document.querySelector('main'); 
+                                if(mainEl) mainEl.scrollTop = 0;
+
+                                // --- Auto Print Sticker After Registration (Include Unit) ---
+                                const printPayload = {
+                                    cytoNo: res.cytoNo,
+                                    fname: payload.fname,
+                                    lname: payload.lname,
+                                    age: payload.age,
+                                    method: payload.method,
+                                    prefix: payload.prefix,
+                                    unit: payload.unit 
+                                };
+                                setTimeout(() => {
+                                    printSticker(printPayload, true);
+                                }, 500);
+                            }
+                        });
+                    } else { 
+                        Swal.fire('Error', res.message, 'error'); 
+                    }
+                } catch (err) {
+                    console.error(err);
+                    Swal.fire('Error', err.message, 'error');
+                } finally { 
+                    isLoading.value = false; 
+                }
+            }
+        };
+
+        const openReportList = () => { 
+            page.value = 'report_list'; 
+            ui.reportSearch = ''; 
+            unitFilter.value = 'All'; 
+            editLogs.value = { regEdits: [], reportEdits: [], initialReport: null };
+        };
+
+        const parseDateTimeString = (dtStr) => {
+            if (!dtStr) return { date: '', time: '' };
+            try {
+                if (dtStr.includes('GMT') || dtStr.includes('Z')) {
+                    const d = new Date(dtStr);
+                    if (!isNaN(d)) {
+                        const pad = (n) => String(n).padStart(2, '0');
+                        return { date: `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`, time: `${pad(d.getHours())}:${pad(d.getMinutes())}` };
+                    }
+                }
+                const parts = dtStr.split(', ');
+                if (parts.length !== 2) return { date: '', time: '' };
+                const [dPart, tPart] = parts;
+                const dateParts = dPart.split('/');
+                if (dateParts.length !== 3) return { date: '', time: '' };
+                const [day, month, year] = dateParts;
+                const dateStr = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+                const timeStr = tPart.substring(0, 5);
+                return { date: dateStr, time: timeStr };
+            } catch(e) { return { date: '', time: '' }; }
+        };
+
+        const formatSignatureDate = (dateVal, timeVal) => {
+            if (!dateVal || !timeVal) return "";
+            const [year, month, day] = dateVal.split('-');
+            return `${parseInt(day)}/${parseInt(month)}/${year}, ${timeVal}:00`;
+        };
+
+        const populateReportForm = (patient) => {
+            formReport.rowId = patient.rowId; 
+            formReport.cytoNo = patient.cytoNo; 
+            formReport.patient = patient;
+            
+            formReport.adequacy = patient.adequacy || ''; 
+            formReport.adequacyDetail = patient.adequacyDetail || '';
+            
+            if (patient.additional && patient.additional.startsWith('029 Other - ')) { 
+                formReport.additional = '029 Other'; 
+                ui.reportAdditionalOther = patient.additional.replace('029 Other - ', ''); 
+            } else { 
+                formReport.additional = patient.additional || ''; 
+                ui.reportAdditionalOther = ''; 
+            }
+            
+            formReport.organismSelections = []; 
+            formReport.organismOtherText = '';
+            if (patient.organism) {
+                const parts = patient.organism.split(',').map(s => s.trim());
+                parts.forEach(p => {
+                    if (p.startsWith('109 Other organism - ')) {
+                        if(!formReport.organismSelections.includes('109 Other organism')) {
+                            formReport.organismSelections.push('109 Other organism');
+                        }
+                        formReport.organismOtherText = p.replace('109 Other organism - ', '');
+                    } else if (p === '109 Other organism') {
+                        if(!formReport.organismSelections.includes('109 Other organism')) {
+                            formReport.organismSelections.push('109 Other organism');
+                        }
+                    } else if (masterOrganism.value.includes(p)) {
+                        if(!formReport.organismSelections.includes(p)) {
+                            formReport.organismSelections.push(p);
+                        }
+                    } else {
+                        if(!formReport.organismSelections.includes('109 Other organism')) {
+                            formReport.organismSelections.push('109 Other organism');
+                        }
+                        formReport.organismOtherText = formReport.organismOtherText ? formReport.organismOtherText + ' ' + p : p;
+                    }
+                });
+            }
+
+            formReport.nonNeoSelections = [];
+            if (patient.nonNeo) {
+                const parts = patient.nonNeo.split(',').map(s => s.trim());
+                parts.forEach(p => {
+                    if (masterNonNeo.value.includes(p)) {
+                        if(!formReport.nonNeoSelections.includes(p)) formReport.nonNeoSelections.push(p);
+                    }
+                });
+            }
+            
+            formReport.squamousMain = patient.squamousMain || '';
+            formReport.squamousSubSingle = ''; 
+            formReport.vainOption = '';
+            
+            if (patient.squamousSub) {
+                if (patient.squamousSub.startsWith('241 SIL - ')) {
+                    formReport.squamousSubSingle = '241 SIL';
+                    formReport.vainOption = patient.squamousSub.replace('241 SIL - ', '');
+                } else {
+                    const firstOption = patient.squamousSub.split(', ')[0];
+                    formReport.squamousSubSingle = firstOption || '';
+                }
+            }
+
+            formReport.glandularMain = patient.glandularMain || '';
+            formReport.glandularSub = patient.glandularSub || '';
+
+            formReport.cat300 = patient.cat300 || '';
+
+            if (patient.comment && patient.comment.startsWith('Other : ')) {
+                ui.commentSelect = 'Other';
+                ui.commentOtherText = patient.comment.replace('Other : ', '');
+            } else {
+                ui.commentSelect = patient.comment || '';
+                ui.commentOtherText = '';
+            }
+
+            if (patient.status === 'Reported' && patient.cytoName) {
+                formReport.cytoName = patient.cytoName;
+            } else {
+                formReport.cytoName = ''; 
+            }
+            
+            if (patient.cytoDateTime) {
+                const parsed = parseDateTimeString(patient.cytoDateTime);
+                formReport.cytoDate = parsed.date;
+                formReport.cytoTime = parsed.time;
+            } else {
+                const now = new Date();
+                formReport.cytoDate = now.toISOString().split('T')[0];
+                formReport.cytoTime = now.toTimeString().substring(0, 5);
+            }
+
+            formReport.hasPatho = !!patient.pathoName;
+            formReport.pathoName = patient.pathoName || '';
+            
+            if (patient.pathoDateTime) {
+                const parsed = parseDateTimeString(patient.pathoDateTime);
+                formReport.pathoDate = parsed.date;
+                formReport.pathoTime = parsed.time;
+            } else {
+                formReport.pathoDate = '';
+                formReport.pathoTime = '';
+            }
+
+            // --- ACCORDION AUTO-EXPAND LOGIC ---
+            nextTick(() => {
+                if (patient.status === 'Reported') {
+                    ui.accordion.adq = !!formReport.adequacy;
+                    ui.accordion.gen = hasData100.value || hasData200Sq.value || hasData200Gl.value || hasData300.value;
+                    ui.accordion.cat100 = hasData100.value;
+                    ui.accordion.cat200 = hasData200Sq.value || hasData200Gl.value;
+                    ui.accordion.cat300 = hasData300.value;
+                } else {
+                    // For Pending cases, collapse all to make it clean
+                    ui.accordion.adq = false;
+                    ui.accordion.gen = false;
+                    ui.accordion.cat100 = false;
+                    ui.accordion.cat200 = false;
+                    ui.accordion.cat300 = false;
+                }
+            });
+        };
+
+        const openReportForm = (patient, isViewOnly = false) => {
+            viewMode.value = isViewOnly;
+            currentReportOriginalData.value = JSON.parse(JSON.stringify(patient)); 
+            populateReportForm(patient);
+            page.value = 'report_form';
+            
+            if (patient.cid && patient.cid.trim() !== '') {
+                fetchPatientHistorySilent(patient);
+            }
+            if (isViewOnly) {
+                fetchEditLogs(patient.cytoNo); // ดึงประวัติถ้าเป็นโหมดดู
+            }
+        };
+
+        const openReportPreview = (patient) => {
+            currentReportOriginalData.value = JSON.parse(JSON.stringify(patient)); 
+            isViewingHistory.value = false;
+            selectedHistoricalReport.value = 'current';
+            patientHistoryData.value = []; 
+            
+            populateReportForm(patient);
+            page.value = 'report_preview';
+
+            if (patient.cid && patient.cid.trim() !== '') {
+                fetchPatientHistorySilent(patient);
+            }
+            fetchEditLogs(patient.cytoNo);
+        };
+
+        // ==============================================================
+        // --- VALIDATION LOGIC IN submitReport ---
+        // ==============================================================
+        const submitReport = async () => {
+            if (viewMode.value) return;
+
+            // 1. ตรวจสอบหมวด 1: Specimen Adequacy
+            if (!formReport.adequacy) {
+                if(typeof Swal !== 'undefined') Swal.fire('ข้อมูลไม่ครบถ้วน', 'กรุณาระบุ Specimen Adequacy', 'warning');
+                ui.accordion.adq = true; // บังคับกางออกให้เห็น
+                return;
+            }
+
+            if (!formReport.adequacyDetail) {
+                if(typeof Swal !== 'undefined') Swal.fire('ข้อมูลไม่ครบถ้วน', 'กรุณาระบุรายละเอียดของ Specimen Adequacy', 'warning');
+                ui.accordion.adq = true;
+                return;
+            }
+
+            if (formReport.additional === '029 Other' && !ui.reportAdditionalOther.trim()) {
+                if(typeof Swal !== 'undefined') Swal.fire('ข้อมูลไม่ครบถ้วน', 'กรุณาระบุข้อความเพิ่มเติมสำหรับ Other ในส่วน Additional', 'warning');
+                ui.accordion.adq = true;
+                return;
+            }
+
+            // 2. ตรวจสอบความขัดแย้งของหมวด 2 กับ 1
+            if ((hasData100.value || hasData200Sq.value || hasData200Gl.value || hasData300.value) && formReport.adequacy !== '010 Satisfactory') {
+                 if(typeof Swal !== 'undefined') {
+                    Swal.fire('ข้อมูลขัดแย้ง', 'หมวด GENERAL CATEGORIZATION จะตอบได้เฉพาะเมื่อเลือก "010 Satisfactory" เท่านั้น กรุณาตรวจสอบอีกครั้ง', 'error');
+                }
+                return;
+            }
+
+            // 3. ตรวจสอบรายละเอียดปลีกย่อยในหมวด 2 (ถ้ามีการเลือก)
+            if (formReport.organismSelections.includes('109 Other organism') && !formReport.organismOtherText.trim()) {
+                if(typeof Swal !== 'undefined') Swal.fire('ข้อมูลไม่ครบถ้วน', 'กรุณาระบุรายละเอียดของ Other organism', 'warning');
+                ui.accordion.gen = true; ui.accordion.cat100 = true;
+                return;
+            }
+
+            if (formReport.squamousMain && !formReport.squamousSubSingle) {
+                if(typeof Swal !== 'undefined') Swal.fire('ข้อมูลไม่ครบถ้วน', 'กรุณาระบุรายละเอียดของ Squamous Cell', 'warning');
+                ui.accordion.gen = true; ui.accordion.cat200 = true;
+                return;
+            }
+
+            if (formReport.squamousSubSingle === '241 SIL' && !formReport.vainOption) {
+                if(typeof Swal !== 'undefined') Swal.fire('ข้อมูลไม่ครบถ้วน', 'กรุณาระบุรายละเอียดย่อยของ 241 SIL', 'warning');
+                ui.accordion.gen = true; ui.accordion.cat200 = true;
+                return;
+            }
+
+            if (formReport.glandularMain && formReport.glandularMain !== '281 Endocervical adenocarcinoma in situ (AIS)' && !formReport.glandularSub) {
+                if(typeof Swal !== 'undefined') Swal.fire('ข้อมูลไม่ครบถ้วน', 'กรุณาระบุรายละเอียดของ Glandular Cells', 'warning');
+                ui.accordion.gen = true; ui.accordion.cat200 = true;
+                return;
+            }
+
+            // 4. ตรวจสอบ Comment
+            if (ui.commentSelect === 'Other' && !ui.commentOtherText.trim()) {
+                if(typeof Swal !== 'undefined') Swal.fire('ข้อมูลไม่ครบถ้วน', 'กรุณาระบุรายละเอียดของ Comment', 'warning');
+                return;
+            }
+
+            // 5. ตรวจสอบ Signatures
+            if (!formReport.cytoName) {
+                if(typeof Swal !== 'undefined') Swal.fire('ข้อมูลไม่ครบถ้วน', 'กรุณาระบุชื่อ Cytotechnologist', 'warning');
+                return;
+            }
+
+            if (!formReport.cytoDate || !formReport.cytoTime) {
+                if(typeof Swal !== 'undefined') Swal.fire('ข้อมูลไม่ครบถ้วน', 'กรุณาระบุวันที่และเวลาของ Cytotechnologist ให้ครบถ้วน', 'warning');
+                return;
+            }
+
+            if (formReport.hasPatho) {
+                if (!formReport.pathoName) {
+                    if(typeof Swal !== 'undefined') Swal.fire('ข้อมูลไม่ครบถ้วน', 'กรุณาระบุชื่อ Pathologist', 'warning');
+                    return;
+                }
+                if (!formReport.pathoDate || !formReport.pathoTime) {
+                    if(typeof Swal !== 'undefined') Swal.fire('ข้อมูลไม่ครบถ้วน', 'กรุณาระบุวันที่และเวลาของ Pathologist ให้ครบถ้วน', 'warning');
+                    return;
+                }
+            }
+
+            if(typeof Swal === 'undefined') return;
+            const confirm = await Swal.fire({
+                title: 'ยืนยันบันทึกผล?',
+                text: 'คุณต้องการบันทึกผลรายงานเซลล์วิทยาใช่หรือไม่?',
+                icon: 'question',
+                showCancelButton: true,
+                confirmButtonText: 'บันทึก',
+                confirmButtonColor: '#10b981'
+            });
+
+            if (confirm.isConfirmed) {
+                isLoading.value = true;
+                try {
+                    const payload = {
+                        rowId: formReport.rowId,
+                        isEdit: formReport.patient.status === 'Reported',
+                        adequacy: formReport.adequacy,
+                        adequacyDetail: formReport.adequacyDetail,
+                        additional: formReport.additional === '029 Other' ? ('029 Other - ' + ui.reportAdditionalOther) : formReport.additional,
+                        
+                        organism: formReport.organismSelections.map(s => {
+                            if (s === '109 Other organism') return '109 Other organism - ' + formReport.organismOtherText;
+                            return s;
+                        }).join(', '),
+                        
+                        nonNeo: formReport.nonNeoSelections.join(', '),
+                        
+                        squamousMain: formReport.squamousMain,
+                        squamousSub: formReport.squamousSubSingle === '241 SIL' ? ('241 SIL - ' + formReport.vainOption) : formReport.squamousSubSingle,
+                        
+                        glandularMain: formReport.glandularMain,
+                        glandularSub: formReport.glandularSub,
+                        
+                        cat300: formReport.cat300,
+                        
+                        comment: ui.commentSelect === 'Other' ? ('Other : ' + ui.commentOtherText) : ui.commentSelect,
+                        
+                        cytoName: formReport.cytoName,
+                        cytoDateTime: formatSignatureDate(formReport.cytoDate, formReport.cytoTime),
+                        
+                        pathoName: formReport.hasPatho ? formReport.pathoName : '',
+                        pathoDateTime: formReport.hasPatho ? formatSignatureDate(formReport.pathoDate, formReport.pathoTime) : ''
+                    };
+
+                    const res = await runGas('apiSubmitReport', payload, config.selectedYear, user.username);
+                    
+                    if (res && res.status === 'success') {
+                        Swal.fire({
+                            icon: 'success',
+                            title: 'บันทึกผลสำเร็จ',
+                            text: 'บันทึกผลการตรวจ Cytology No: ' + formReport.cytoNo,
+                            confirmButtonText: 'ตกลง'
+                        }).then(() => {
+                            page.value = 'report_list';
+                            fetchData();
+                        });
+                    } else {
+                        Swal.fire('Error', res.message, 'error');
+                    }
+                } catch (err) {
+                    console.error(err);
+                    Swal.fire('Error', err.message, 'error');
+                } finally {
+                    isLoading.value = false;
+                }
+            }
+        };
+
+        const executePrint = () => {
+            frontendLog("Initiated Print / PDF", "User opened print dialog for report: " + formReport.cytoNo, user.username);
+            window.print();
+        };
+
+        const generatePdfFilename = () => {
+            if (!formReport.patient || !formReport.cytoNo) return 'Cyto_Report.pdf';
+            return `Cyto_Report_${formReport.cytoNo}_${formReport.patient.fname}.pdf`;
+        };
+
+        const getPrintDateTime = () => {
+            const now = new Date();
+            const pad = (n) => String(n).padStart(2, '0');
+            return `${pad(now.getDate())}/${pad(now.getMonth() + 1)}/${now.getFullYear()}, ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+        };
+
+        const openChangePassword = async () => {
+            const { value: formValues } = await Swal.fire({
+                title: 'เปลี่ยนรหัสผ่าน',
+                html:
+                    '<input id="swal-input1" class="swal2-input" type="password" placeholder="รหัสผ่านใหม่">' +
+                    '<input id="swal-input2" class="swal2-input" type="password" placeholder="ยืนยันรหัสผ่านใหม่">',
+                focusConfirm: false,
+                showCancelButton: true,
+                confirmButtonText: 'บันทึก',
+                cancelButtonText: 'ยกเลิก',
+                preConfirm: () => {
+                    const p1 = document.getElementById('swal-input1').value;
+                    const p2 = document.getElementById('swal-input2').value;
+                    if (!p1 || !p2) {
+                        Swal.showValidationMessage('กรุณากรอกรหัสให้ครบถ้วน');
+                        return false;
+                    }
+                    if (p1 !== p2) {
+                        Swal.showValidationMessage('รหัสผ่านไม่ตรงกัน');
+                        return false;
+                    }
+                    return p1;
+                }
+            });
+
+            if (formValues) {
+                isLoading.value = true;
+                try {
+                    const res = await runGas('apiChangePassword', user.username, formValues);
+                    if(res.status === 'success') {
+                        Swal.fire('สำเร็จ', 'เปลี่ยนรหัสผ่านเรียบร้อย', 'success');
+                    } else {
+                        Swal.fire('ข้อผิดพลาด', res.message, 'error');
+                    }
+                } catch(e) {
+                    Swal.fire('ข้อผิดพลาด', e.message, 'error');
+                } finally {
+                    isLoading.value = false;
+                }
+            }
+        };
+
+        const handleImageUpload = (event, type) => {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            if (file.size > 2 * 1024 * 1024) {
+                Swal.fire('ไฟล์ใหญ่เกินไป', 'กรุณาอัปโหลดรูปภาพขนาดไม่เกิน 2MB', 'warning');
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = async (e) => {
+                const base64Data = e.target.result;
+                isLoading.value = true;
+                try {
+                    if (type === 'profile') {
+                        const res = await runGas('apiSaveProfileImage', user.username, base64Data);
+                        if(res.status === 'success') {
+                            user.image = res.url;
+                            const savedUserStr = localStorage.getItem('cytoUser_v99');
+                            if (savedUserStr) {
+                                const savedUser = JSON.parse(savedUserStr);
+                                savedUser.user.image = res.url;
+                                localStorage.setItem('cytoUser_v99', JSON.stringify(savedUser));
+                            }
+                            Swal.fire('สำเร็จ', 'อัปเดตรูปโปรไฟล์เรียบร้อย', 'success');
+                        }
+                    } else if (type === 'logo') {
+                        const res = await runGas('apiSaveSystemLogo', base64Data, user.username);
+                        if(res.status === 'success') {
+                            systemConfig.logoUrl = res.url;
+                            const savedUserStr = localStorage.getItem('cytoUser_v99');
+                            if (savedUserStr) {
+                                const savedUser = JSON.parse(savedUserStr);
+                                savedUser.systemLogo = res.url;
+                                localStorage.setItem('cytoUser_v99', JSON.stringify(savedUser));
+                            }
+                            showSettingsModal.value = false;
+                            Swal.fire('สำเร็จ', 'อัปเดตโลโก้ระบบเรียบร้อย', 'success');
+                        }
+                    }
+                } catch(err) {
+                    Swal.fire('ข้อผิดพลาด', err.message, 'error');
+                } finally {
+                    isLoading.value = false;
+                    event.target.value = '';
+                }
+            };
+            reader.readAsDataURL(file);
+        };
+
+        return {
+            appVersion, page, loginStep, formLogin, otpInput, otpMessage, otpCooldown,
+            isLocked, lockPassword, lockError, unlockScreen, handleCancelUnlock,
+            isLoading, isDataLoading, isSpinning, isEditMode, viewMode, isSidebarOpen, isDashboardTopOpen,
+            theme, changeTheme, showSettingsModal, showProfileModal, showStickerModal,
+            
+            // Zoom & Editor states
+            stickerZoom, activeStickerElement, zoomInSticker, zoomOutSticker, resetZoomSticker, handleZoomWheel,
+            startDrag, startRotate,
+            
+            showHistoryModal, isHistoryLoading, isHistoryPreloading, patientHistoryData, historySearchCid, 
+            selectedHistoricalReport, isViewingHistory, fetchPatientHistory, viewHistoricalReport,
+            
+            checkMPI, editLogs, // <--- Export checkMPI และ editLogs ให้หน้า UI นำไปใช้
+
+            stickerConfig, mockSticker, saveStickerConfig, printSticker,
+
+            user, systemConfig, config, stats,
+            unitFilter, statusFilter, dashDateStart, dashDateEnd, searchQuery, filteredPatients, filteredReportPatients,
+            masterUnits, masterDistricts, masterAdequacy, masterCytoTechs, masterPathos,
+            masterOrganism, masterNonNeo, masterContras, masterPrevTx, masterSpecimenType, masterComment, prefixes,
+            formReg, ui, formReport,
+            handleLoginStep1, handleLoginStep2, handleResendOtp, handleCancelLogin, handleLogout, lockScreen,
+            fetchData, openRegisterPage, openEditMode, openViewMode, submitRegister,
+            openReportList, openReportForm, openReportPreview, submitReport,
+            adequacyDetailOptions, additionalOptions, squamousDetailOptions, squamousSubDetailOptions, glandularDetailOptions,
+            hasData100, hasData200Sq, hasData200Gl, hasData300, hasDataComment,
+            
+            // --- การจัดกลุ่มรายงานผล ---
+            hasData200, displayHeader300, displayHeader200, displayHeader100, append100Details,
+            canEditGenCat, // Export ให้ UI ใช้ปิด/เปิดส่วนของ Cat 2
+            // ----------------------------------------------------
+
+            closeAllDropdowns, selectContra, togglePrevTx, toggleOrganism, toggleNonNeo,
+            toggleCheckAdq, toggleCheckGen, toggleCheck100, toggleCheck200, toggleCheck300, 
+            prompt030, promptRequireSatisfactory, // Export alert ใหม่
+            formatNoCode, formatOrganisms, formatCommentPdf, getMethodColor,
+            progressPercent, canAccessReport, canViewReportDoc, tatOverview, unitStats, getTAT,
+            executePrint, generatePdfFilename, getPrintDateTime, hospitalLogoBase64, hospitalLogoUrl,
+            logoRef, toggleLogo, isLogoPlaying, handleTableScroll, handleMainScroll,
+            openChangePassword, handleImageUpload, masterSquamous, masterGlandular, masterCat300,
+            methodStats, getMethodTextColor, getMethodColorStyle, historicalOptions, formatDisplayDate
+        };
+    }
+});
+
+app.mount('#app');
+</script>
