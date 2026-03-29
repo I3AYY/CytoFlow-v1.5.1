@@ -82,6 +82,7 @@ const app = createApp({
         const isLoading = ref(false);
         const isDataLoading = ref(false);
         const isSpinning = ref(false);
+        const isMpiLoading = ref(false); // เพิ่ม State สำหรับ Spinner ค้นหา CID
         const isEditMode = ref(false);
         const viewMode = ref(false); 
         const isSidebarOpen = ref(true); 
@@ -801,33 +802,41 @@ const app = createApp({
             generateBarcode();
         };
 
-        // ฟังก์ชันใหม่สำหรับเช็ค MPI อัตโนมัติเมื่อกรอก HN หรือ CID
+        // --- ฟังก์ชันเช็ค MPI อัตโนมัติเมื่อกรอก CID (ปรับแก้บังคับตรวจสอบและหน้าต่างให้ตรงตาม Requirement) ---
         const checkMPI = async (searchType) => {
             // ไม่เช็คเมื่ออยู่ในโหมด Edit หรือ View (เช็คเฉพาะตอนลงทะเบียนใหม่)
             if (viewMode.value || isEditMode.value) return; 
             
-            const val = searchType === 'HN' ? formReg.hn : formReg.cid;
+            // บังคับให้ค้นหาด้วย CID เท่านั้น ตาม Requirement ใหม่
+            if (searchType !== 'CID') return;
+
+            const val = formReg.cid;
             if (!val || String(val).trim() === '') return;
 
+            isMpiLoading.value = true; // เปิด Loading Spinner ที่ช่อง CID
+
             try {
-                const res = await runGas('apiCheckPatientMPI', searchType, val);
+                const res = await runGas('apiCheckPatientMPI', 'CID', val);
                 if (res && res.status === 'found' && res.patient) {
                     const pat = res.patient;
-                    const fullName = `${pat.prefix}${pat.fname} ${pat.lname}`;
+                    const hnDisplay = pat.hn ? ` (HN: ${pat.hn})` : '';
+                    const fullName = `${pat.prefix || ''}${pat.fname || ''} ${pat.lname || ''}`;
                     
                     if(typeof Swal !== 'undefined') {
                         const result = await Swal.fire({
                             title: 'พบประวัติผู้ป่วยเดิม',
-                            html: `พบข้อมูลที่ตรงกับ <b>${searchType}: ${val}</b> คือ<br><strong class="text-xl text-indigo-600 mt-3 mb-1 block">${fullName}</strong><br>ต้องการใช้ชื่อ-สกุลนี้หรือไม่?`,
+                            html: `พบข้อมูลที่ตรงกับเลขประจำตัวประชาชน <b>${val}</b> คือ<br><strong class="text-xl text-indigo-600 mt-3 mb-1 block">${fullName}${hnDisplay}</strong><br>ต้องการใช้ชื่อและประวัตินี้หรือไม่?`,
                             icon: 'info',
+                            allowOutsideClick: false, // บังคับให้เลือก ไม่ให้คลิกพื้นที่ว่างเพื่อปิด
                             showCancelButton: true,
                             confirmButtonColor: '#4f46e5',
                             cancelButtonColor: '#64748b',
-                            confirmButtonText: 'ใช้ชื่อนี้',
-                            cancelButtonText: 'พิมพ์เอง'
+                            confirmButtonText: 'ตกลง', // เปลี่ยนจาก "ใช้ชื่อนี้"
+                            cancelButtonText: 'ยกเลิก'  // เปลี่ยนจาก "พิมพ์เอง"
                         });
 
                         if (result.isConfirmed) {
+                            formReg.hn = pat.hn || formReg.hn; // เติม HN อัตโนมัติ (ถ้ามี)
                             formReg.prefix = pat.prefix || '';
                             formReg.fname = pat.fname || '';
                             formReg.lname = pat.lname || '';
@@ -836,6 +845,8 @@ const app = createApp({
                 }
             } catch (e) {
                 console.log("MPI Check Error:", e);
+            } finally {
+                isMpiLoading.value = false; // ปิด Loading Spinner
             }
         };
 
@@ -2260,12 +2271,13 @@ const app = createApp({
             const { value: formValues } = await Swal.fire({
                 title: 'เปลี่ยนรหัสผ่าน',
                 html:
-                    '<input id="swal-input1" class="swal2-input" type="password" placeholder="รหัสผ่านใหม่">' +
-                    '<input id="swal-input2" class="swal2-input" type="password" placeholder="ยืนยันรหัสผ่านใหม่">',
+                    '<input id="swal-input1" class="swal2-input" type="password" placeholder="รหัสผ่านใหม่" style="background-color: var(--bg-input); color: var(--text-main); border-color: var(--border-input);">' +
+                    '<input id="swal-input2" class="swal2-input" type="password" placeholder="ยืนยันรหัสผ่านใหม่" style="background-color: var(--bg-input); color: var(--text-main); border-color: var(--border-input);">',
                 focusConfirm: false,
                 showCancelButton: true,
                 confirmButtonText: 'บันทึก',
                 cancelButtonText: 'ยกเลิก',
+                allowOutsideClick: false,
                 preConfirm: () => {
                     const p1 = document.getElementById('swal-input1').value;
                     const p2 = document.getElementById('swal-input2').value;
@@ -2351,7 +2363,7 @@ const app = createApp({
         return {
             appVersion, page, loginStep, formLogin, otpInput, otpMessage, otpCooldown,
             isLocked, lockPassword, lockError, unlockScreen, handleCancelUnlock,
-            isLoading, isDataLoading, isSpinning, isEditMode, viewMode, isSidebarOpen, isDashboardTopOpen,
+            isLoading, isDataLoading, isSpinning, isMpiLoading, isEditMode, viewMode, isSidebarOpen, isDashboardTopOpen,
             theme, changeTheme, showSettingsModal, showProfileModal, showStickerModal,
             
             // Zoom & Editor states
