@@ -1,0 +1,603 @@
+<!-- Import Google Fonts สำหรับใช้งานใน Sticker Layout (v1.5.1 AI Core) -->
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600&family=Prompt:wght@300;400;500;600&family=Roboto+Mono:wght@400;500;600&family=Sarabun:wght@300;400;500;600;700&family=Taviraj:wght@400;500;600&display=swap');
+</style>
+
+<style>
+  /* --- THEME VARIABLES (IOS Liquid Glass Inspired) --- */
+  :root {
+      --bg-main: #f4f7f6;
+      --bg-sidebar: rgba(255, 255, 255, 0.75);
+      --bg-card: rgba(255, 255, 255, 0.65);
+      --bg-input: rgba(255, 255, 255, 0.8);
+      --text-main: #334155;
+      --text-muted: #64748b;
+      --border-color: rgba(0, 0, 0, 0.08); 
+      --border-input: #cbd5e1;
+      --shadow-glass: 0 8px 32px 0 rgba(31, 38, 135, 0.07);
+      --glass-blur: blur(20px) saturate(180%);
+      --row-hover: rgba(0, 0, 0, 0.02); 
+  }
+
+  [data-theme="dark"] {
+      --bg-main: #1e2430;
+      --bg-sidebar: rgba(30, 36, 48, 0.75);
+      --bg-card: rgba(40, 48, 62, 0.65);
+      --bg-input: rgba(30, 36, 48, 0.8);
+      --text-main: #e2e8f0;
+      --text-muted: #94a3b8;
+      --border-color: rgba(255, 255, 255, 0.05);
+      --border-input: #475569;
+      --shadow-glass: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+      --glass-blur: blur(20px) saturate(150%);
+      --row-hover: rgba(50, 60, 75, 0.9);
+  }
+
+  [data-theme="eyecare"] {
+      --bg-main: #fbf6ec;
+      --bg-sidebar: rgba(251, 246, 236, 0.75);
+      --bg-card: rgba(253, 250, 242, 0.65);
+      --bg-input: rgba(255, 255, 255, 0.8);
+      --text-main: #4a4036;
+      --text-muted: #8c7e6e;
+      --border-color: rgba(100, 80, 50, 0.1);
+      --border-input: #d8cbbb;
+      --shadow-glass: 0 8px 32px 0 rgba(100, 80, 50, 0.05);
+      --glass-blur: blur(20px) saturate(160%);
+      --row-hover: rgba(100, 80, 50, 0.03);
+  }
+
+  /* Base Application */
+  body { 
+      background-color: var(--bg-main); 
+      color: var(--text-main); 
+      font-size: 15px; 
+      transition: background-color 0.5s ease, color 0.5s ease;
+  }
+  
+  .swal2-container { z-index: 9999 !important; }
+
+  .theme-text { color: var(--text-main); }
+  .theme-text-muted { color: var(--text-muted); }
+  .theme-border { border-color: var(--border-color); }
+  .theme-row-hover:hover { background-color: var(--row-hover) !important; }
+
+  /* iOS Liquid Glass Classes */
+  .liquid-glass {
+      background: var(--bg-card);
+      backdrop-filter: var(--glass-blur);
+      -webkit-backdrop-filter: var(--glass-blur);
+      border: 1px solid var(--border-color);
+      box-shadow: var(--shadow-glass);
+      transition: all 0.5s ease;
+  }
+  .liquid-sidebar {
+      background: var(--bg-sidebar);
+      backdrop-filter: var(--glass-blur);
+      -webkit-backdrop-filter: var(--glass-blur);
+      border-right: 1px solid var(--border-color);
+  }
+
+  /* Inputs & Labels */
+  .label-sm { display: block; font-size: 0.875rem; font-weight: 700; color: var(--text-muted); margin-bottom: 0.1rem; }
+  .input-std { 
+      width: 100%; border: 1px solid var(--border-input); padding: 0.35rem 0.6rem;
+      border-radius: 0.5rem; font-size: 0.9375rem; outline: none; 
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); background: var(--bg-input);
+      color: var(--text-main); min-height: 38px; 
+  }
+  .input-std:focus { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+  
+  /* ปิดปุ่มลูกศรขึ้นลงในช่อง input type="number" */
+  input[type="number"]::-webkit-outer-spin-button, 
+  input[type="number"]::-webkit-inner-spin-button { 
+      -webkit-appearance: none; 
+      margin: 0; 
+  }
+  input[type="number"] { -moz-appearance: textfield; }
+
+  input:disabled, select:disabled, textarea:disabled, .cursor-not-allowed {
+      background-color: rgba(0,0,0,0.03) !important; border-color: transparent !important;
+      color: var(--text-muted) !important; opacity: 0.7 !important; box-shadow: none !important;
+  }
+
+  th.py-2\.5, td.py-2\.5 { padding-top: 0.5rem; padding-bottom: 0.5rem; }
+
+  /* --- REPORT ACCORDION UI --- */
+  .report-accordion-item {
+      border: 1px solid var(--border-color);
+      border-radius: 0.75rem;
+      margin-bottom: 0.75rem;
+      background: var(--bg-card);
+      overflow: hidden;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  
+  .report-accordion-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 1rem 1.25rem;
+      cursor: pointer;
+      user-select: none;
+      background-color: transparent;
+      transition: background-color 0.2s ease;
+  }
+  
+  .report-accordion-header:hover {
+      background-color: rgba(0,0,0,0.02);
+  }
+  
+  [data-theme="dark"] .report-accordion-header:hover {
+      background-color: rgba(255,255,255,0.05);
+  }
+  
+  .report-accordion-title-area {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      flex: 1;
+  }
+  
+  .report-accordion-title {
+      font-size: 1.05rem;
+      font-weight: 600;
+      color: var(--text-main);
+  }
+
+  /* Custom Checkbox (ช่องกาถูกด้านหน้า) */
+  .report-checkbox {
+      width: 24px;
+      height: 24px;
+      border-radius: 6px;
+      border: 2px solid var(--border-input);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      background: var(--bg-input);
+      flex-shrink: 0;
+  }
+  
+  .report-checkbox:hover {
+      border-color: #3b82f6; /* Blue 500 */
+      transform: scale(1.05);
+  }
+  
+  .report-checkbox.is-checked {
+      background-color: #10b981; /* Emerald 500 */
+      border-color: #10b981;
+  }
+  
+  .report-checkbox svg {
+      width: 14px;
+      height: 14px;
+      fill: none;
+      stroke: white;
+      stroke-width: 3;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      opacity: 0;
+      transform: scale(0.5);
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  
+  .report-checkbox.is-checked svg {
+      opacity: 1;
+      transform: scale(1);
+  }
+
+  /* Chevron / Arrow Dropdown (ลูกศรด้านหลัง) */
+  .report-chevron {
+      width: 20px;
+      height: 20px;
+      color: var(--text-muted);
+      transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  
+  .report-accordion-item.is-expanded > .report-accordion-header .report-chevron {
+      transform: rotate(180deg);
+  }
+
+  /* Content Body */
+  .report-accordion-content {
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+      padding: 0 1.25rem;
+      opacity: 0;
+  }
+  
+  .report-accordion-item.is-expanded > .report-accordion-content {
+      max-height: 2500px;
+      padding: 0 1.25rem 1.25rem 1.25rem;
+      opacity: 1;
+      overflow: visible;
+  }
+
+  /* Sub-Accordion สำหรับหมวด 100, 200, 300 */
+  .sub-accordion-item {
+      border: 1px solid var(--border-input);
+      border-radius: 0.5rem;
+      margin-top: 0.75rem;
+      background: rgba(255, 255, 255, 0.3);
+  }
+  
+  [data-theme="dark"] .sub-accordion-item {
+      background: rgba(0, 0, 0, 0.1);
+  }
+
+  .sub-accordion-item .report-accordion-header {
+      padding: 0.75rem 1rem;
+  }
+  
+  .sub-accordion-item .report-accordion-title {
+      font-size: 0.95rem;
+      font-weight: 500;
+  }
+
+  /* --- Animations & Effects --- */
+  @keyframes stampEffect {
+      0% { opacity: 0; transform: scale(1.5) rotate(-45deg); }
+      60% { opacity: 1; transform: scale(0.9) rotate(-45deg); }
+      100% { opacity: 1; transform: scale(1) rotate(-45deg); }
+  }
+  .animate-stamp {
+      animation: stampEffect 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+  }
+
+  th.sticky, td.sticky {
+      box-shadow: inset -1px 0 0 var(--border-color);
+      clip-path: inset(0 -10px 0 0); 
+      background-color: #f8fafc !important; 
+      z-index: 40;
+  }
+  
+  th.sticky {
+      z-index: 60 !important; 
+  }
+
+  .mpi-latest-col-header {
+      background-color: #eef2ff !important; 
+      box-shadow: inset 3px 3px 0px 0px #818cf8, inset -3px 0px 0px 0px #818cf8 !important;
+  }
+  .mpi-latest-col {
+      background-color: #ffffff !important;
+      box-shadow: inset 3px 0px 0px 0px #818cf8, inset -3px 0px 0px 0px #818cf8 !important;
+  }
+  .mpi-latest-col-bottom {
+      background-color: #ffffff !important;
+      box-shadow: inset 3px -3px 0px 0px #818cf8, inset -3px -3px 0px 0px #818cf8 !important;
+  }
+  
+  .preview-comment-box {
+      background-color: #ffffff !important;
+      border: 1px solid #cbd5e1;
+  }
+
+  /* --- MPI Table Fixed Layout --- */
+  .mpi-table-wrapper {
+      background-color: #f1f5f9; 
+      box-shadow: inset 0 2px 8px rgba(0,0,0,0.05);
+  }
+  .mpi-table {
+      table-layout: fixed; 
+      width: max-content; 
+      background-color: #ffffff;
+  }
+  .mpi-header-col {
+      width: 140px; 
+      min-width: 140px; 
+      max-width: 140px;
+  }
+  .mpi-data-col {
+      width: calc((95vw - 60px - 140px) / 3);
+      min-width: calc((95vw - 60px - 140px) / 3);
+      max-width: calc((95vw - 60px - 140px) / 3);
+      word-wrap: break-word;
+  }
+
+  @media (max-width: 1024px) {
+      .mpi-data-col {
+          width: 320px;
+          min-width: 320px;
+          max-width: 320px;
+      }
+  }
+
+  /* Transitions & Animations */
+  .fade-enter-active, .fade-leave-active { transition: opacity 0.4s cubic-bezier(0.4, 0, 0.2, 1); }
+  .fade-enter-from, .fade-leave-to { opacity: 0; }
+  
+  .slide-fade-enter-active { transition: all 0.5s cubic-bezier(0.16, 1, 0.3, 1); }
+  .slide-fade-leave-active { transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+  .slide-fade-enter-from, .slide-fade-leave-to { transform: translateY(20px); opacity: 0; }
+
+  .screen-lock-enter-active, .screen-lock-leave-active { transition: all 0.8s cubic-bezier(0.16, 1, 0.3, 1); }
+  .screen-lock-enter-from, .screen-lock-leave-to { opacity: 0; backdrop-filter: blur(0px); transform: scale(1.05); }
+
+  [v-cloak] { display: none; }
+  html { scroll-behavior: smooth; }
+  
+  /* Custom Scrollbar */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border-input); border-radius: 10px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+  
+  .custom-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+  .custom-scroll::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 10px; }
+  .custom-scroll::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+  .animate-energy-bar { background-size: 200% 200%; animation: energyFlow 3.2s linear infinite; }
+  @keyframes energyFlow { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+  .bg-deep-space { background-color: #0f172a; } 
+  @keyframes blob { 0% { transform: translate(0px, 0px) scale(1); } 33% { transform: translate(40px, -60px) scale(1.1); } 66% { transform: translate(-30px, 30px) scale(0.9); } 100% { transform: translate(0px, 0px) scale(1); } }
+  .animate-blob { animation: blob 8s infinite alternate ease-in-out; }
+  .animation-delay-2000 { animation-delay: 2s; } .animation-delay-4000 { animation-delay: 4s; }
+
+  @keyframes pastel-breathing { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
+  .animated-pastel-text { background: linear-gradient(270deg, #f472b6, #c084fc, #38bdf8, #818cf8); background-size: 300% 300%; -webkit-background-clip: text; -webkit-text-fill-color: transparent; animation: pastel-breathing 4s ease infinite; padding-bottom: 0.15em; margin-bottom: -0.15em; }
+  .gimmick-hover { transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1); display: inline-block; }
+  .gimmick-hover:hover { background: linear-gradient(270deg, #f472b6, #c084fc, #38bdf8, #818cf8); background-size: 300% 300%; -webkit-background-clip: text; -webkit-text-fill-color: transparent; animation: pastel-breathing 4s ease infinite; transform: scale(1.15) translateY(-2px); font-weight: 900; }
+
+  .smart-blur-wrapper { transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1); position: relative; }
+  .smart-blur-content { transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1); }
+  .smart-blur-wrapper.is-blurred .smart-blur-content { filter: blur(5px); opacity: 0.4; pointer-events: none; user-select: none; }
+  .smart-blur-wrapper.is-blurred:hover .smart-blur-content { filter: blur(0px); opacity: 1; pointer-events: auto; }
+
+  /* ==============================================================
+     --- NEW UI: Edit History Timeline (v1.5.1 AI Core) --- 
+     ============================================================== */
+  .edit-history-list {
+      margin-top: 0.5rem;
+      padding-left: 1rem;
+      border-left: 2px solid #e2e8f0;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+  }
+  .edit-history-item {
+      position: relative;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+  }
+  .edit-history-item::before {
+      content: '';
+      position: absolute;
+      left: -1.4rem;
+      top: 0.3rem;
+      width: 0.5rem;
+      height: 0.5rem;
+      border-radius: 50%;
+      background-color: #94a3b8;
+      border: 2px solid var(--bg-card);
+  }
+  .edit-history-item.is-edited::before {
+      background-color: #f59e0b; /* Amber 500 */
+  }
+
+  /* ==============================================================
+     --- NEW UI: Screen Lock Overlay Z-Index Fix (v1.5.1 AI Core) --- 
+     ============================================================== */
+  .lock-screen-overlay {
+      z-index: 999999 !important; /* บังคับให้ทับ Swal2 (9999) และ Modal ทุกชนิด */
+  }
+
+  /* ==============================================================
+     --- STICKER WYSIWYG DESIGNER CSS --- 
+     ============================================================== */
+  .sticker-designer-modal {
+      width: 100%;
+      max-width: 900px;
+      display: grid;
+      grid-template-columns: 1fr;
+  }
+  @media (min-width: 768px) {
+      .sticker-designer-modal { grid-template-columns: 1fr 320px; }
+  }
+
+  .canvas-zoom-wrapper {
+      position: relative;
+      overflow: auto;
+      background: #f8fafc;
+      padding: 30px;
+      border-radius: 8px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 350px;
+      box-shadow: inset 0 2px 8px rgba(0,0,0,0.05);
+  }
+
+  .zoom-controls {
+      position: absolute;
+      bottom: 15px;
+      right: 15px;
+      display: flex;
+      gap: 5px;
+      background: rgba(255, 255, 255, 0.95);
+      padding: 5px;
+      border-radius: 8px;
+      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+      z-index: 50;
+      backdrop-filter: blur(5px);
+  }
+
+  .zoom-btn {
+      width: 36px;
+      height: 36px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+      color: #475569;
+      cursor: pointer;
+      transition: all 0.2s;
+  }
+  .zoom-btn:hover { background: #e2e8f0; color: #0f172a; }
+
+  .sticker-canvas-bg {
+      background-image: radial-gradient(#cbd5e1 1.5px, transparent 1.5px);
+      background-size: 5mm 5mm;
+      background-color: #ffffff;
+      border: 1px solid #cbd5e1;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+      position: relative;
+      overflow: hidden;
+      margin: 0 auto;
+      transform-origin: center center;
+      transition: transform 0.2s ease-out;
+  }
+  
+  .sticker-element {
+      position: absolute;
+      cursor: move;
+      user-select: none;
+      white-space: nowrap;
+      line-height: 1;
+      font-family: sans-serif;
+      transform-origin: center center;
+      border: 1px dashed transparent;
+      transition: border-color 0.1s, background-color 0.1s;
+      padding: 2px;
+      color: black;
+  }
+
+  .sticker-element:active { cursor: grabbing; }
+  .sticker-element:hover { border-color: #94a3b8; }
+  .sticker-element.active {
+      border-color: #3b82f6;
+      background-color: rgba(59, 130, 246, 0.05);
+      z-index: 20;
+  }
+  
+  .sticker-element.active::before {
+      content: '';
+      position: absolute;
+      top: -20px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 1px;
+      height: 20px;
+      background: #3b82f6;
+  }
+  .sticker-element.active .rotator-handle {
+      position: absolute;
+      top: -28px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 22px;
+      height: 22px;
+      background-color: #ffffff;
+      background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="%233b82f6" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"></path><path d="M21 13a9 9 0 1 1-3-7.7L21 8"></path></svg>');
+      background-repeat: no-repeat;
+      background-position: center;
+      border: 2px solid #3b82f6;
+      border-radius: 50%;
+      cursor: grab;
+      z-index: 25;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+      transition: all 0.2s ease;
+  }
+  .sticker-element.active .rotator-handle:hover {
+      transform: translateX(-50%) scale(1.1);
+      background-color: #eff6ff;
+  }
+  .sticker-element.active .rotator-handle:active {
+      cursor: grabbing;
+      transform: translateX(-50%) scale(0.95);
+  }
+
+  .sticker-element img, 
+  .sticker-element canvas, 
+  .sticker-element svg {
+      pointer-events: none;
+      -webkit-user-drag: none;
+      user-select: none;
+  }
+
+  /* --- PRINT & PDF REPORT CSS --- */
+  .a4-container {
+      width: 210mm;
+      height: 297mm;
+      background: white;
+      color: black;
+      margin: 0 auto;
+      padding: 15mm;
+      box-sizing: border-box;
+      box-shadow: 0 0 10px rgba(0,0,0,0.1);
+      border-radius: 4px;
+      font-family: "Sarabun", "TH Sarabun New", sans-serif;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden; 
+  }
+
+  .print-bg-slate {
+      background-color: #F8FAFC !important;
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+  }
+
+  @media print {
+      @page { 
+          margin: 0; 
+          size: A4 portrait; 
+      }
+      
+      html, body {
+          width: 210mm;
+          height: 297mm;
+          margin: 0 !important;
+          padding: 0 !important;
+          overflow: hidden !important;
+          background: white !important;
+      }
+      
+      #app, main, .flex-1, .h-screen, .h-full, .overflow-hidden, .overflow-y-auto {
+          height: 100% !important;
+          min-height: 0 !important;
+          overflow: hidden !important;
+          position: static !important;
+          display: block !important;
+      }
+      
+      aside, nav, .no-print, .swal2-container {
+          display: none !important;
+      }
+      
+      .a4-container {
+          position: absolute !important;
+          top: 0 !important;
+          left: 0 !important;
+          width: 210mm !important;
+          height: 297mm !important; 
+          max-height: 297mm !important;
+          margin: 0 !important;
+          padding: 10mm 15mm !important;
+          box-sizing: border-box !important;
+          box-shadow: none !important;
+          border: none !important;
+          border-radius: 0 !important;
+          page-break-inside: avoid !important;
+          page-break-after: avoid !important;
+          overflow: hidden !important;
+          
+          display: flex !important;
+          flex-direction: column !important;
+          justify-content: space-between !important;
+      }
+
+      .a4-container > .flex-grow {
+          flex-grow: 1 !important;
+      }
+      
+      .liquid-glass { background: transparent !important; border: none !important; box-shadow: none !important; backdrop-filter: none !important;}
+      * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+  }
+</style>
