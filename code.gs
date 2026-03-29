@@ -393,8 +393,10 @@ function apiGetPatientHistory(cid, username) {
 }
 
 // --- API: CHECK PATIENT MPI (v1.5.1 AI Core) ---
-// ค้นหา HN หรือ CID ว่าเคยมีในระบบไหม เพื่อ Auto-fill
+// ค้นหาประวัติว่าเคยมีในระบบไหม เพื่อ Auto-fill (ปรับปรุงให้ค้นหาด้วย CID เท่านั้น ตามหลัก PDPA และความแม่นยำ)
 function apiCheckPatientMPI(searchType, searchValue) {
+  // หมายเหตุ: ตัวแปร searchType ถูกเก็บไว้เพื่อไม่ให้กระทบกับการส่งค่ามาจากฝั่ง Frontend เดิม 
+  // แต่โค้ดภายในจะสนใจเฉพาะการตรวจจับ CID เท่านั้น
   if (!searchValue || String(searchValue).trim() === "") return { status: 'not_found' };
   
   const searchStr = String(searchValue).trim();
@@ -427,11 +429,8 @@ function apiCheckPatientMPI(searchType, searchValue) {
           const hn = String(data[r][1]).trim();
           const cid = String(data[r][2]).trim();
           
-          let isMatch = false;
-          if (searchType === 'HN' && hn === searchStr) isMatch = true;
-          if (searchType === 'CID' && cid === searchStr) isMatch = true;
-
-          if (isMatch) {
+          // ตรวจสอบการ Match จาก CID อย่างเดียว ตาม Requirement
+          if (cid === searchStr) {
             const dateVal = new Date(data[r][9] || data[r][8] || 0).getTime(); // recDate or specimenDate
             // หากเจอข้อมูลที่ใหม่กว่า ให้ทับค่าเดิม
             if (dateVal >= latestDate) {
