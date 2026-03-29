@@ -55,7 +55,14 @@
       transition: background-color 0.5s ease, color 0.5s ease;
   }
   
-  .swal2-container { z-index: 9999 !important; }
+  /* แก้ปัญหา Processing โดน Modal ปลดล็อกหน้าจอบัง (ตั้งให้สูงกว่า 999999) */
+  .swal2-container { z-index: 9999999 !important; }
+
+  /* --- SWEETALERT THEME SUPPORT (เพื่อให้ Modal เข้ากับ Theme) --- */
+  [data-theme="dark"] .swal2-popup { background: var(--bg-card) !important; color: var(--text-main) !important; border: 1px solid var(--border-color); backdrop-filter: var(--glass-blur); }
+  [data-theme="dark"] .swal2-title, [data-theme="dark"] .swal2-html-container { color: var(--text-main) !important; }
+  [data-theme="eyecare"] .swal2-popup { background: var(--bg-card) !important; color: var(--text-main) !important; border: 1px solid var(--border-color); }
+  [data-theme="eyecare"] .swal2-title, [data-theme="eyecare"] .swal2-html-container { color: var(--text-main) !important; }
 
   .theme-text { color: var(--text-main); }
   .theme-text-muted { color: var(--text-muted); }
@@ -86,7 +93,7 @@
       transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); background: var(--bg-input);
       color: var(--text-main); min-height: 38px; 
   }
-  .input-std:focus { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+  .input-std:focus { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.05); border-color: #3b82f6; }
   
   /* ปิดปุ่มลูกศรขึ้นลงในช่อง input type="number" */
   input[type="number"]::-webkit-outer-spin-button, 
@@ -207,6 +214,7 @@
       transition: max-height 0.4s cubic-bezier(0.4, 0, 0.2, 1);
       padding: 0 1.25rem;
       opacity: 0;
+      color: var(--text-main); /* แก้ปัญหาตัวหนังสือกลืนกับพื้นหลังในโหมดมืด */
   }
   
   .report-accordion-item.is-expanded > .report-accordion-content {
@@ -224,8 +232,10 @@
       background: rgba(255, 255, 255, 0.3);
   }
   
+  /* ปรับการแสดงผล Sub-Accordion ในโหมดมืด */
   [data-theme="dark"] .sub-accordion-item {
-      background: rgba(0, 0, 0, 0.1);
+      background: rgba(0, 0, 0, 0.2);
+      border-color: var(--border-color);
   }
 
   .sub-accordion-item .report-accordion-header {
@@ -383,7 +393,7 @@
      --- NEW UI: Screen Lock Overlay Z-Index Fix (v1.5.1 AI Core) --- 
      ============================================================== */
   .lock-screen-overlay {
-      z-index: 999999 !important; /* บังคับให้ทับ Swal2 (9999) และ Modal ทุกชนิด */
+      z-index: 999999 !important; /* บังคับให้ทับ Modal ทุกชนิด แต่จะถูก Swal2 (9999999) ทับอีกที */
   }
 
   /* ==============================================================
@@ -394,6 +404,7 @@
       max-width: 900px;
       display: grid;
       grid-template-columns: 1fr;
+      color: var(--text-main); /* ปรับสีตัวอักษรใน Modal ให้เข้ากับ Theme */
   }
   @media (min-width: 768px) {
       .sticker-designer-modal { grid-template-columns: 1fr 320px; }
@@ -402,14 +413,14 @@
   .canvas-zoom-wrapper {
       position: relative;
       overflow: auto;
-      background: #f8fafc;
+      background: var(--bg-main); /* เปลี่ยนให้กลมกลืนตาม Theme (เลิกใช้ค่าคงที่ #f8fafc) */
       padding: 30px;
       border-radius: 8px;
       display: flex;
       justify-content: center;
       align-items: center;
       min-height: 350px;
-      box-shadow: inset 0 2px 8px rgba(0,0,0,0.05);
+      box-shadow: inset 0 2px 8px var(--border-color); /* เงาด้านในที่ปรับตาม Theme */
   }
 
   .zoom-controls {
@@ -418,12 +429,12 @@
       right: 15px;
       display: flex;
       gap: 5px;
-      background: rgba(255, 255, 255, 0.95);
+      background: var(--bg-card); /* ปรับตาม Theme */
       padding: 5px;
       border-radius: 8px;
       box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
       z-index: 50;
-      backdrop-filter: blur(5px);
+      backdrop-filter: var(--glass-blur);
   }
 
   .zoom-btn {
@@ -433,18 +444,18 @@
       align-items: center;
       justify-content: center;
       background: transparent;
-      border: 1px solid #e2e8f0;
+      border: 1px solid var(--border-input);
       border-radius: 6px;
-      color: #475569;
+      color: var(--text-main); /* ปรับตาม Theme */
       cursor: pointer;
       transition: all 0.2s;
   }
-  .zoom-btn:hover { background: #e2e8f0; color: #0f172a; }
+  .zoom-btn:hover { background: var(--row-hover); color: var(--text-main); }
 
   .sticker-canvas-bg {
       background-image: radial-gradient(#cbd5e1 1.5px, transparent 1.5px);
       background-size: 5mm 5mm;
-      background-color: #ffffff;
+      background-color: #ffffff; /* พื้นหลังของกระดาษสติ๊กเกอร์ ยังคงต้องเป็นสีขาวเสมอ */
       border: 1px solid #cbd5e1;
       box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
       position: relative;
@@ -465,7 +476,7 @@
       border: 1px dashed transparent;
       transition: border-color 0.1s, background-color 0.1s;
       padding: 2px;
-      color: black;
+      color: black; /* ข้อความบนสติ๊กเกอร์ต้องเป็นสีดำเสมอ */
   }
 
   .sticker-element:active { cursor: grabbing; }
